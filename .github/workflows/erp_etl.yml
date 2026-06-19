@@ -1,0 +1,39 @@
+name: ERP to BigQuery ETL
+
+on:
+  schedule:
+    # Berjalan setiap hari jam 23:00 UTC (Sama seperti konfigurasi Airflow Anda)
+    - cron: '0 23 * * *'
+  workflow_dispatch: # Fitur opsional agar Anda bisa klik tombol "Run workflow" manual dari UI GitHub
+
+jobs:
+  run-etl-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Checkout kode dari repositori
+    - name: Checkout Repository Kode
+      uses: actions/checkout@v4
+
+    # 2. Setup Python environment
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python_version: '3.10'
+
+    # 3. Install semua dependensi library yang dibutuhkan
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests pandas pyarrow python-dateutil google-cloud-bigquery
+
+    # 4. Melakukan autentikasi ke Google Cloud menggunakan Secret
+    - name: Authenticate to Google Cloud
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets::GCP_SA_KEY }}
+
+    # 5. Jalankan script ETL utama
+    - name: Run ETL Script
+      run: python etl_fact_transaction.py
