@@ -32,7 +32,7 @@ jobs:
       id: auth
       uses: google-github-actions/auth@v2
       with:
-        credentials_json: ${{ secrets::GCP_SA_KEY }}
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
 
     # 5. Jalankan script ETL utama
     - name: Run ETL Script
