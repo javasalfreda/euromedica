@@ -15,19 +15,19 @@ jobs:
     - name: Checkout Repository Kode
       uses: actions/checkout@v4
 
-    # 2. Setup Python environment (Sudah fix tanpa warning)
+    # 2. Setup Python environment
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
-    # 3. Install semua dependensi library
+    # 3. Install semua dependensi library (DITAMBAHKAN NUMPY)
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install requests pandas pyarrow python-dateutil google-cloud-bigquery
+        pip install requests pandas pyarrow python-dateutil google-cloud-bigquery numpy
 
-    # 4. Melakukan autentikasi ke Google Cloud menggunakan Secret (Sudah fix syntax)
+    # 4. Melakukan autentikasi ke Google Cloud menggunakan Secret
     - name: Authenticate to Google Cloud
       id: auth
       uses: google-github-actions/auth@v2
@@ -38,6 +38,10 @@ jobs:
     - name: Run Cekat Boards Tracker Script
       run: python etl_boards_tracker_skin_slim.py
 
-    # 6. Jalankan ETL Cekat Kedua: All Boards Cekat (Dinamis Exclude)
+    # 6. Jalankan ETL Cekat Kedua: All Boards Cekat
     - name: Run All Boards Cekat Script
       run: python etl_all_boards_cekat.py
+
+    # 7. Jalankan ETL Cekat Ketiga: Boards Calendar Cekat
+    - name: Run Boards Calendar Cekat Script
+      run: python etl_boards_calendar_cekat.py
