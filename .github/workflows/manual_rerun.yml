@@ -16,13 +16,13 @@ on:
           - 'etl_fact_transaction.py'
           - 'Jalankan Semua Script Cekat AI'
 
+# 🌟 TAMBAHKAN BLOK ENV DI SINI JUGA
+env:
+  CEKAT_API_KEY: ${{ secrets.CEKAT_API_KEY }}
+
 jobs:
   manual-execution:
     runs-on: ubuntu-latest
-
-    # 🌟 TAMBAHKAN BLOK ENV DI SINI JUGA
-    env:
-      CEKAT_API_KEY: ${{ secrets.CEKAT_API_KEY }}
 
     steps:
     # 1. Setup standar (Hanya jalan sekali di awal)
