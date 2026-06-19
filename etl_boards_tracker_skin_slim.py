@@ -17,26 +17,57 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# Cukup daftarkan nama board-nya saja di sini
 TARGET_BOARDS = [
-    {"id": "7df005f0-793b-43ea-8ca6-1192726fa4d1", "name": "Tracker SKIN+ New"},
-    {"id": "c607fdb8-cb9c-430f-9084-632666b97b07", "name": "Tracker SLIM+ New"}
+    "Tracker SKIN+ New",
+    "Tracker SLIM+ New"
 ]
 
 # =========================
 # 2. FUNCTIONS
 # =========================
 
+def get_board_mapping():
+    """Mengambil semua daftar board dari API untuk mendapatkan mapping Name -> ID"""
+    print("🔄 Mengambil daftar seluruh board dari Cekat AI...")
+    url = f"{BASE_URL}/api/crm/boards"
+    
+    try:
+        response = requests.get(url, headers=HEADERS)
+        if response.status_code != 200:
+            print(f"❌ Gagal mengambil daftar board: {response.text}")
+            return {}
+        
+        # Asumsi response structure standar: {"data": [{"id": "...", "name": "..."}, ...]}
+        boards_data = response.json().get("data", [])
+        
+        # Buat dictionary mapping { "Nama Board": "ID Board" }
+        mapping = {board["name"]: board["id"] for board in boards_data if "name" in board and "id" in board}
+        return mapping
+    except Exception as e:
+        print(f"❌ Error saat fetch board mapping: {e}")
+        return {}
+
 def extract_cekat_raw():
     all_data = []
     
-    # Menggantikan context['ds_nodash'] bawaan Airflow dengan date UTC harian
+    # 1. Dapatkan mapping ID secara dinamis berdasarkan nama
+    board_mapping = get_board_mapping()
+    if not board_mapping:
+        print("❌ Tidak ada mapping board yang ditemukan. Proses dihentikan.")
+        return None
+        
     execution_date = datetime.utcnow().strftime('%Y%m%d')
     
-    for board in TARGET_BOARDS:
-        board_id = board["id"]
-        board_name = board["name"]
+    # 2. Iterasi berdasarkan list nama yang ditargetkan
+    for board_name in TARGET_BOARDS:
+        board_id = board_mapping.get(board_name)
         
-        print(f"🚀 Memulai extraction untuk board: {board_name}")
+        if not board_id:
+            print(f"⚠️ Board '{board_name}' tidak ditemukan di sistem Cekat AI. Skipping...")
+            continue
+            
+        print(f"🚀 Memulai extraction untuk board: {board_name} (ID: {board_id})")
         page = 1
         
         while True:
@@ -77,7 +108,6 @@ def extract_cekat_raw():
     if "item_id" in df.columns:
         df = df.drop_duplicates(subset=["item_id"])
 
-    # Di GitHub Actions, file disimpan langsung di working directory runner saat ini
     file_path = f"cekat_raw_tracker_{execution_date}.parquet"
     df.to_parquet(file_path, index=False)
     
@@ -104,10 +134,8 @@ def load_to_bq(file_path, client):
 # 3. MAIN EXECUTION
 # =========================
 if __name__ == "__main__":
-    # Inisialisasi Google BigQuery Client murni
     client = bigquery.Client()
     
-    # Jalankan alur secara sekuensial (Mengganti operator >> Airflow)
     saved_file = extract_cekat_raw()
     if saved_file:
         load_to_bq(saved_file, client)
