@@ -34,6 +34,10 @@ jobs:
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    # 5. Jalankan script ETL utama
-    - name: Run ETL Script
+    # 5. Jalankan script ETL Pertama (Data Transaksi ERP)
+    - name: Run ERP Fact Transaction Script
       run: python etl_fact_transaction.py
+
+    # 6. Jalankan script ETL Kedua (Cekat AI Tracker)
+    - name: Run Cekat Boards Tracker Script
+      run: python etl_boards_tracker_skin_slim.py
