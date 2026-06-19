@@ -10,6 +10,10 @@ jobs:
   run-cekat-pipeline:
     runs-on: ubuntu-latest
 
+    # 🌟 TAMBAHKAN BLOK ENV DI SINI (Level Job)
+    env:
+      CEKAT_API_KEY: ${{ secrets.CEKAT_API_KEY }}
+
     steps:
     # 1. Checkout kode dari repositori
     - name: Checkout Repository Kode
