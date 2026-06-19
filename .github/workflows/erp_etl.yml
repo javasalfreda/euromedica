@@ -38,6 +38,6 @@ jobs:
     - name: Run ERP Fact Transaction Script
       run: python etl_fact_transaction.py
 
-    # 6. Jalankan script ETL Kedua (Cekat AI Tracker)
-    - name: Run Cekat Boards Tracker Script
-      run: python etl_boards_tracker_skin_slim.py
+    # 6. Jalankan script ETL Dim Customer
+    - name: Run ERP Dim Customer Script
+      run: python etl_dim_customer.py
