@@ -3,7 +3,7 @@ name: ERP to BigQuery ETL
 on:
   schedule:
     # Berjalan setiap hari jam 23:00 UTC (Sama seperti konfigurasi Airflow Anda)
-    - cron: '0 23 * * *'
+    - cron: '37 22 * * *'
   workflow_dispatch: # Fitur opsional agar Anda bisa klik tombol "Run workflow" manual dari UI GitHub
 
 jobs:
@@ -34,10 +34,14 @@ jobs:
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    # 5. Jalankan script ETL Pertama (Data Transaksi ERP)
+    # 5. Jalankan script ETL Trx (Data Transaksi ERP)
     - name: Run ERP Fact Transaction Script
       run: python etl_fact_transaction.py
 
-    # 6. Jalankan script ETL Dim Customer
+    # 6. Jalankan script ETL Trx Premium (Data Transaksi ERP ESC ESL EHL)
+    - name: Run ERP Fact Transaction Script
+      run: python etl_fact_transaction_esc_esl.py
+
+    # 7. Jalankan script ETL Dim Customer
     - name: Run ERP Dim Customer Script
       run: python etl_dim_customer.py
