@@ -3,7 +3,7 @@ name: Cekat AI to BigQuery ETL
 on:
   schedule:
     # Berjalan harian setiap jam 23:00 UTC (06:00 WIB)
-    - cron: '0 23 * * *'
+    - cron: '39 22 * * *'
   workflow_dispatch: # Supaya bisa di-klik manual untuk testing
 
 jobs:
