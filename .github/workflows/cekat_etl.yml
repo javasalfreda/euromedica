@@ -49,3 +49,7 @@ jobs:
     # 7. Jalankan ETL Cekat Ketiga: Boards Calendar Cekat
     - name: Run Boards Calendar Cekat Script
       run: python etl_boards_calendar_cekat.py
+
+    # 8. Jalankan ETL Cekat Keempat: Conversation Cekat
+    - name: Run Conversation Cekat Script
+      run: python etl_conversation_cekat.py
