@@ -65,7 +65,7 @@ jobs:
 
     - name: Jalankan Fact Transaction ESC ESL EHL
       if: github.event.inputs.etl_script == 'etl_fact_transaction_esc_esl.py'
-      run: python etl_dim_customer.py
+      run: python etl_fact_transaction_esc_esl.py
 
     - name: Jalankan Fact Transaction
       if: github.event.inputs.etl_script == 'etl_fact_transaction.py'
