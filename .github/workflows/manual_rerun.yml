@@ -14,6 +14,7 @@ on:
           - 'etl_boards_calendar_cekat.py'
           - 'etl_dim_customer.py'
           - 'etl_fact_transaction.py'
+          - 'etl_fact_transaction_esc_esl.py'
           - 'Jalankan Semua Script Cekat AI'
 
 # 🌟 TAMBAHKAN BLOK ENV DI SINI JUGA
@@ -60,6 +61,10 @@ jobs:
 
     - name: Jalankan Dim Customer
       if: github.event.inputs.etl_script == 'etl_dim_customer.py'
+      run: python etl_dim_customer.py
+
+    - name: Jalankan Fact Transaction ESC ESL EHL
+      if: github.event.inputs.etl_script == 'etl_fact_transaction_esc_esl.py'
       run: python etl_dim_customer.py
 
     - name: Jalankan Fact Transaction
