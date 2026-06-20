@@ -13,6 +13,7 @@ on:
           - 'etl_all_boards_cekat.py'
           - 'etl_boards_calendar_cekat.py'
           - 'etl_conversation_cekat.py'
+          - 'etl_messages_cekat_ads.py'
           - 'etl_dim_customer.py'
           - 'etl_fact_transaction.py'
           - 'etl_fact_transaction_esc_esl.py'
@@ -63,6 +64,10 @@ jobs:
     - name: Jalankan Conversation
       if: github.event.inputs.etl_script == 'etl_conversation_cekat.py' || github.event.inputs.etl_script == 'Jalankan Semua Script Cekat AI'
       run: python etl_conversation_cekat.py
+
+    - name: Jalankan Messages
+      if: github.event.inputs.etl_script == 'etl_messages_cekat_ads.py' || github.event.inputs.etl_script == 'Jalankan Semua Script Cekat AI'
+      run: python etl_messages_cekat_ads.py
 
     - name: Jalankan Dim Customer
       if: github.event.inputs.etl_script == 'etl_dim_customer.py'
