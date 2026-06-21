@@ -127,7 +127,7 @@ def transform_bq(client):
 
         UNION ALL
 
-        SELECT DISTINCT * EXCEPT(_extracted_at)
+        SELECT DISTINCT * EXCEPT(_company, _year, _month, _extracted_at)
         FROM `{RAW_TABLE_ID}`
         WHERE DATE(transaction_date) >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)
 
