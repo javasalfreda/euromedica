@@ -127,7 +127,9 @@ def transform_bq(client):
 
         UNION ALL
 
+        -- Menggunakan EXCEPT untuk membuang kolom internal, dan REPLACE untuk mengubah tipe project menjadi FLOAT64
         SELECT DISTINCT * EXCEPT(_company, _year, _month, _extracted_at)
+            REPLACE(CAST(project AS FLOAT64) AS project)
         FROM `{RAW_TABLE_ID}`
         WHERE DATE(transaction_date) >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)
 
