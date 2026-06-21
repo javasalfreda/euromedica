@@ -132,15 +132,16 @@ def load_staging_and_upsert(file_path, client):
         client.query(create_query).result()
         print(f"🎉 Sukses membuat tabel utama awal.")
     else:
-        # 2. FIX LOGIC MERGE: Menggunakan pola Delete-then-Insert murni berbasis ID
+# 2. FIX LOGIC MERGE: Menggunakan pola Delete-then-Insert murni berbasis ID
         upsert_query = f"""
             -- Hapus data lama di tabel utama yang ID-nya masuk dalam update terbaru di staging
             DELETE FROM `{MAIN_TABLE_ID}`
             WHERE id IN (SELECT id FROM `{STAGING_TABLE_ID}`);
 
             -- Masukkan seluruh data baru/ter-update dari staging ke tabel utama
+            -- Menggunakan REPLACE agar tipe data ads_data diubah ke STRING tanpa merubah urutan kolom
             INSERT INTO `{MAIN_TABLE_ID}`
-            SELECT * FROM `{STAGING_TABLE_ID}`;
+            SELECT * REPLACE(CAST(ads_data AS STRING) AS ads_data) FROM `{STAGING_TABLE_ID}`;
         """
         client.query(upsert_query).result()
         print(f"🚀 Data Upserted successfully into `{MAIN_TABLE_ID}`.")
