@@ -10,8 +10,8 @@ from google.cloud import bigquery
 BASE_URL = "https://erpeuromedicagroup.com"
 LOGIN_URL = f"{BASE_URL}/api/method/login"
 REPORT_URL = f"{BASE_URL}/api/method/frappe.desk.query_report.run"
-USERNAME = "javas.dei@skinplusclinic.com"
-PASSWORD = "251211"
+USERNAME = "denny.asarias.dei@skinplusclinic.com"
+PASSWORD = "260628"
 REPORT_NAME = "Item-wise Sales History"
 
 def etl_erp_to_parquet():
