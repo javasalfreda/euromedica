@@ -13,7 +13,7 @@ BASE_URL = "https://erpeuromedicagroup.com"
 LOGIN_URL = f"{BASE_URL}/api/method/login"
 REPORT_URL = f"{BASE_URL}/api/method/frappe.desk.query_report.run"
 
-PASSWORD = "251211"
+PASSWORD = "260628"
 REPORT_NAME = "Item-wise Sales History"
 
 # Separasi Layer Data Warehouse
@@ -21,9 +21,9 @@ RAW_TABLE_ID = "euromedica-495509.raw.raw_trx_esc_esl"
 PROD_TABLE_ID = "euromedica-495509.database.fact_transaction_esc_esl"
 
 ACCOUNTS = [
-    {"username": "javas.ehl@euromedicagroup.com", "company": "EUROHAIRLAB"},
-    {"username": "javas.esc@euromedicagroup.com", "company": "European Slimming Centre"},
-    {"username": "javas.esl@euromedicagroup.com", "company": "EUROSKINLAB"},
+    {"username": "denny.asarias.ehl@euromedicagroup.com", "company": "EUROHAIRLAB"},
+    {"username": "denny.asarias.esc@euromedicagroup.com", "company": "European Slimming Centre"},
+    {"username": "denny.asarias.esl@euromedicagroup.com", "company": "EUROSKINLAB"},
 ]
 
 def extract_erp_dynamic():
