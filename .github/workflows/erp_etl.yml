@@ -2,8 +2,8 @@ name: ERP to BigQuery ETL
 
 on:
   schedule:
-    # Berjalan setiap hari jam 23:00 UTC (Sama seperti konfigurasi Airflow Anda)
-    - cron: '37 22 * * *'
+    # Berjalan setiap hari jam 19:00 UTC (02.00 WIB)
+    - cron: '37 19 * * *'
   workflow_dispatch: # Fitur opsional agar Anda bisa klik tombol "Run workflow" manual dari UI GitHub
 
 jobs:
