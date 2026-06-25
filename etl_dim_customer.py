@@ -13,10 +13,10 @@ LOGIN_URL = f"{BASE_URL}/api/method/login"
 DATA_URL = f"{BASE_URL}/api/resource/Customer"
 
 ACCOUNTS = [
-    {"username": "javas.ehl@euromedicagroup.com", "password": "251211", "brand": "EUROHAIRLAB"},
-    {"username": "javas.esc@euromedicagroup.com", "password": "251211", "brand": "ESC"},
-    {"username": "javas.esl@euromedicagroup.com", "password": "251211", "brand": "ESL"},
-    {"username": "javas.dei@skinplusclinic.com", "password": "251211", "brand": "SKIN SLIM"}
+    {"username": "denny.asarias.ehl@euromedicagroup.com", "password": "260628", "brand": "EUROHAIRLAB"},
+    {"username": "denny.asarias.esc@euromedicagroup.com", "password": "260628", "brand": "ESC"},
+    {"username": "denny.asarias.esl@euromedicagroup.com", "password": "260628", "brand": "ESL"},
+    {"username": "denny.asarias.dei@skinplusclinic.com", "password": "260628", "brand": "SKIN SLIM"}
 ]
 
 TARGET_FIELDS = [
