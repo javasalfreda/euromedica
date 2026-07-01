@@ -48,7 +48,7 @@ def extract_and_clean_cekat():
 
         page = 1
         while True:
-            url = f"{BASE_URL}/api/crm/boards/{board_id}/items?limit=5000&page={page}"
+            url = f"{BASE_URL}/api/crm/boards/{board_id}/items?limit=1000&page={page}"
             response = requests.get(url, headers=HEADERS)
             if response.status_code != 200: break
             
