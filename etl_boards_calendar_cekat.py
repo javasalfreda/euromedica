@@ -60,7 +60,7 @@ def extract_and_clean_cekat():
                 row["board_name"] = board_name
             
             all_data.extend(data)
-            if len(data) < 1000: break
+            if len(data) <= 0: break
             page += 1
             time.sleep(1)
 
