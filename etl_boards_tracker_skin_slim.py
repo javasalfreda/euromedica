@@ -75,7 +75,7 @@ def extract_cekat_raw():
             print(f"✅ {board_name} - Page {page} berhasil ditarik ({len(data)} rows)")
 
             # Jika data yang ditarik kurang dari limit, berarti sudah halaman terakhir
-            if len(data) < 5000:
+            if len(data) < 1000:
                 break
             
             page += 1
