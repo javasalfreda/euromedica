@@ -89,7 +89,7 @@ def extract_cekat_raw():
             all_data.extend(data)
             print(f"✅ {board_name} - Page {page} berhasil ditarik ({len(data)} rows)")
 
-            if len(data) < 5000:
+            if len(data) < 1000:
                 break
             
             page += 1
