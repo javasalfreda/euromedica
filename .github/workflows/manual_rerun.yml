@@ -17,7 +17,6 @@ on:
           - 'etl_dim_customer.py'
           - 'etl_fact_transaction.py'
           - 'etl_fact_transaction_esc_esl.py'
-          - 'etl_all_boards_cekat_ehl_esc_esl.py'
           - 'Jalankan Semua Script Cekat AI'
 
 # 🌟 TAMBAHKAN BLOK ENV DI SINI JUGA
@@ -81,10 +80,6 @@ jobs:
     - name: Jalankan Fact Transaction
       if: github.event.inputs.etl_script == 'etl_fact_transaction.py'
       run: python etl_fact_transaction.py
-
-    - name: Jalankan All Boards Cekat ESC ESL
-      if: github.event.inputs.etl_script == 'etl_all_boards_cekat_ehl_esc_esl.py'
-      run: python etl_all_boards_cekat_ehl_esc_esl.py
 
 
 
