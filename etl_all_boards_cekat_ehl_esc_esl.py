@@ -8,7 +8,7 @@ from google.cloud import bigquery
 # =========================
 # 1. KONFIGURASI
 # =========================
-API_KEY = os.getenv("CEKAT_API_KEY")
+API_KEY = os.getenv("CEKAT_API_KEY2")
 BASE_URL = "https://api.cekat.ai"
 TABLE_ID = "euromedica-495509.raw.all_boards_cekat_ehl_esc_esl"
 
