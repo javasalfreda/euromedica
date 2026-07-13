@@ -17,6 +17,7 @@ on:
           - 'etl_dim_customer.py'
           - 'etl_fact_transaction.py'
           - 'etl_fact_transaction_esc_esl.py'
+          - 'etl_all_boards_cekat_ehl_esc_esl'
           - 'Jalankan Semua Script Cekat AI'
 
 # 🌟 TAMBAHKAN BLOK ENV DI SINI JUGA
