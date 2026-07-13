@@ -80,3 +80,12 @@ jobs:
     - name: Jalankan Fact Transaction
       if: github.event.inputs.etl_script == 'etl_fact_transaction.py'
       run: python etl_fact_transaction.py
+
+    - name: Jalankan All Boards Cekat ESC ESL
+      if: github.event.inputs.etl_script == 'etl_all_boards_cekat_ehl_esc_esl.py'
+      run: python etl_all_boards_cekat_ehl_esc_esl.py
+
+
+
+
+
