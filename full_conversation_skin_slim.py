@@ -121,6 +121,8 @@ df_messages.to_parquet(file_path, index=False)
     
 print(f"✅ Cleaned data saved ke Parquet: {len(df_messages)} rows")
 
+client = bigquery.Client()
+
 if not file_path or not os.path.exists(file_path):
     print("❌ File parquet tidak ditemukan.")
 
