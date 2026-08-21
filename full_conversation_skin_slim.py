@@ -17,7 +17,7 @@ end_date_str = "2026-08-01"
 
 all_messages = []
 current_page = 1
-#limit_per_page = 250
+limit_per_page = 250
 
 PROD_TABLE_ID = "euromedica-495509.database.full_conversation_skin_slim"
 
@@ -31,7 +31,7 @@ while True:
       "start_date": start_date_str,
       "end_date": end_date_str,
       "page": current_page,
-      #"limit": limit_per_page,
+      "limit": limit_per_page,
   }
 
   try:
