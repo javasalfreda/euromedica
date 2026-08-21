@@ -130,7 +130,7 @@ job_config = bigquery.LoadJobConfig(
 )
 
 with open(file_path, "rb") as source_file:
-    job = client.load_table_from_file(source_file, TABLE_ID, job_config=job_config)
+    job = client.load_table_from_file(source_file, PROD_TABLE_ID, job_config=job_config)
 
 job.result()
 print(f"🚀 Data berhasil ditambahkan ke BigQuery. Total: {job.output_rows} baris.")
