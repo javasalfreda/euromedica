@@ -8,7 +8,7 @@ url = "https://api.cekat.ai/api/messages"
 
 API_KEY = os.getenv("CEKAT_API_KEY")
 
-headers = {"Authorization": f"api_key {api_key}"}
+headers = {"Authorization": f"Bearer {API_KEY}"}
 
 # Atur rentang tanggal sesuai kebutuhan Anda (format: YYYY-MM-DD)
 start_date_str = "2026-08-01"
