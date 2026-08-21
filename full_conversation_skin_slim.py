@@ -89,7 +89,6 @@ if not df_messages.empty:
       "status",
   ]
   available_cols = [c for c in columns_to_show if c in df_messages.columns]
-  display(df_messages[available_cols])
 else:
   print("ℹ️ Tidak ada data pesan ditemukan pada rentang tanggal tersebut.")
 
