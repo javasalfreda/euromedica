@@ -17,7 +17,7 @@ end_date_str = "2026-08-01"
 
 all_messages = []
 current_page = 1
-limit_per_page = 500
+#limit_per_page = 250
 
 PROD_TABLE_ID = "euromedica-495509.database.full_conversation_skin_slim"
 
@@ -31,7 +31,7 @@ while True:
       "start_date": start_date_str,
       "end_date": end_date_str,
       "page": current_page,
-      "limit": limit_per_page,
+      #"limit": limit_per_page,
   }
 
   try:
@@ -62,7 +62,7 @@ while True:
         break
 
       current_page += 1
-      time.sleep(1.5)  # Jeda sejenak agar tidak terkena rate limit
+      time.sleep(1.2)  # Jeda sejenak agar tidak terkena rate limit
 
     else:
       print(
@@ -76,7 +76,25 @@ while True:
     break
 
 # Gabungkan semua hasil ke dalam DataFrame akhir
+
 df_messages = pd.DataFrame(all_messages)
+
+# Convert all columns to string
+def convert_to_string(x):
+    if x is None:
+        return None
+
+    if isinstance(x, (list, dict)):
+        return json.dumps(x, ensure_ascii=False)
+
+    # Handle NaN / NaT
+    if pd.isna(x):
+        return None
+
+    return str(x)
+
+for col in df_messages.columns:
+    df_messages[col] = df_messages[col].apply(convert_to_string)
 
 # Pilih kolom yang ingin ditampilkan jika data tidak kosong
 if not df_messages.empty:
@@ -88,6 +106,8 @@ if not df_messages.empty:
       "sent_by_type",
       "message",
       "status",
+      "inbox",
+      "ads_data"
   ]
   available_cols = [c for c in columns_to_show if c in df_messages.columns]
 else:
