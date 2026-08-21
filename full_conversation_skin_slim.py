@@ -4,6 +4,7 @@ import os
 import pandas as pd
 import requests
 import time
+from google.cloud import bigquery
 
 url = "https://api.cekat.ai/api/messages"
 
@@ -18,7 +19,7 @@ end_date_str = "2026-08-17"
 
 all_messages = []
 current_page = 1
-limit_per_page = 250
+limit_per_page = 300
 
 PROD_TABLE_ID = "euromedica-495509.database.full_conversation_skin_slim"
 
@@ -63,7 +64,7 @@ while True:
         break
 
       current_page += 1
-      time.sleep(1.2)  # Jeda sejenak agar tidak terkena rate limit
+      time.sleep(1)  # Jeda sejenak agar tidak terkena rate limit
 
     else:
       print(
@@ -119,3 +120,17 @@ file_path = f"cekat_full_conversations_{execution_date_str}.parquet"
 df_messages.to_parquet(file_path, index=False)
     
 print(f"✅ Cleaned data saved ke Parquet: {len(df_messages)} rows")
+
+if not file_path or not os.path.exists(file_path):
+    print("❌ File parquet tidak ditemukan.")
+
+job_config = bigquery.LoadJobConfig(
+    source_format=bigquery.SourceFormat.PARQUET,
+    write_disposition=bigquery.WriteDisposition.WRITE_APPEND, # Create or Replace
+)
+
+with open(file_path, "rb") as source_file:
+    job = client.load_table_from_file(source_file, TABLE_ID, job_config=job_config)
+
+job.result()
+print(f"🚀 Data berhasil ditambahkan ke BigQuery. Total: {job.output_rows} baris.")
