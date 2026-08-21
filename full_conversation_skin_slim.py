@@ -13,8 +13,8 @@ headers = {"Authorization": f"Bearer {API_KEY}"}
 
 # Atur rentang tanggal sesuai kebutuhan Anda (format: YYYY-MM-DD)
 today_dt = datetime.utcnow()
-start_date_str = "2026-08-01"
-end_date_str = "2026-08-01"
+start_date_str = "2026-08-17"
+end_date_str = "2026-08-17"
 
 all_messages = []
 current_page = 1
@@ -118,4 +118,4 @@ execution_date_str = today_dt.strftime('%Y%m%d')
 file_path = f"cekat_full_conversations_{execution_date_str}.parquet"
 df_messages.to_parquet(file_path, index=False)
     
-print(f"✅ Cleaned data saved ke Parquet: {len(df)} rows")
+print(f"✅ Cleaned data saved ke Parquet: {len(df_messages)} rows")
