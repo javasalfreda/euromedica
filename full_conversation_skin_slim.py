@@ -17,7 +17,7 @@ end_date_str = "2026-08-01"
 
 all_messages = []
 current_page = 1
-limit_per_page = 250
+limit_per_page = 500
 
 PROD_TABLE_ID = "euromedica-495509.database.full_conversation_skin_slim"
 
@@ -62,7 +62,7 @@ while True:
         break
 
       current_page += 1
-      time.sleep(1)  # Jeda sejenak agar tidak terkena rate limit
+      time.sleep(1.5)  # Jeda sejenak agar tidak terkena rate limit
 
     else:
       print(
