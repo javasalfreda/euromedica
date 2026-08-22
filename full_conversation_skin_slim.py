@@ -14,8 +14,8 @@ headers = {"Authorization": f"Bearer {API_KEY}"}
 
 # Atur rentang tanggal sesuai kebutuhan Anda (format: YYYY-MM-DD)
 today_dt = datetime.utcnow()
-start_date_str = "2026-08-17"
-end_date_str = "2026-08-17"
+start_date_str = "2026-07-01"
+end_date_str = "2026-07-31"
 
 all_messages = []
 current_page = 1
@@ -64,7 +64,7 @@ while True:
         break
 
       current_page += 1
-      time.sleep(1)  # Jeda sejenak agar tidak terkena rate limit
+      time.sleep(1.5)  # Jeda sejenak agar tidak terkena rate limit
 
     else:
       print(
