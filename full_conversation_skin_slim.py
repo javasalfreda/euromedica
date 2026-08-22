@@ -81,46 +81,25 @@ while True:
 # Gabungkan semua hasil ke dalam DataFrame akhir
 df_messages = pd.DataFrame(all_messages)
 
-# delete beberapa kolom
-df_messages = df_messages.drop(columns=["interactive", "is_template"])
+columns_to_show = [
+  "id",
+  "conversation_id",
+  "created_at",
+  "updated_at",
+  "phone_number",
+  "chat_credited_used",
+  "sent_by_name",
+  "sent_by_type",
+  "message",
+  "status",
+  "inbox",
+  "ads_data"
+]
 
-# Pilih kolom yang ingin ditampilkan jika data tidak kosong
-if not df_messages.empty:
-  columns_to_show = [
-      "conversation_id",
-      "created_at",
-      "phone_number",
-      "sent_by_name",
-      "sent_by_type",
-      "message",
-      "status",
-      "inbox",
-      "ads_data"
-  ]
-  available_cols = [c for c in columns_to_show if c in df_messages.columns]
-else:
-  print("ℹ️ Tidak ada data pesan ditemukan pada rentang tanggal tersebut.")
-
-# Convert all columns to string
-def convert_to_string(x):
-    if x is None:
-        return None
-
-    if isinstance(x, (list, dict)):
-        return json.dumps(x, ensure_ascii=False)
-
-    # Handle NaN / NaT
-    if pd.isna(x):
-        return None
-
-    return str(x)
-
-for col in df_messages.columns:
-    df_messages[col] = df_messages[col].apply(convert_to_string)
 
 execution_date_str = today_dt.strftime('%Y%m%d')
 file_path = f"cekat_full_conversations_{execution_date_str}.parquet"
-df_messages.to_parquet(file_path, index=False)
+df_messages[columns_to_show].to_parquet(file_path, index=False)
     
 print(f"✅ Cleaned data saved ke Parquet: {len(df_messages)} rows")
 
