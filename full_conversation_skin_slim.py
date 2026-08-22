@@ -121,5 +121,5 @@ job.result()
 
 print(
     f"✅ Successfully inserted {job.output_rows} rows "
-    f"into {TABLE_ID}"
+    f"into {PROD_TABLE_ID}"
 )
