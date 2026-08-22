@@ -87,7 +87,7 @@ columns_to_show = [
   "created_at",
   "updated_at",
   "phone_number",
-  "chat_credits_used",
+  #"chat_credits_used",
   "sent_by_name",
   "sent_by_type",
   "message",
@@ -96,7 +96,6 @@ columns_to_show = [
   "ads_data"
 ]
 
-df_messages["chat_credits_used"] = df_messages["chat_credits_used"].apply(lambda x: None if pd.isna(x) else str(x))
 
 execution_date_str = today_dt.strftime('%Y%m%d')
 file_path = f"cekat_full_conversations_{execution_date_str}.parquet"
