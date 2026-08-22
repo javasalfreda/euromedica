@@ -77,9 +77,12 @@ while True:
     print(f"❌ Exception pada page {current_page}: {e}")
     break
 
-# Gabungkan semua hasil ke dalam DataFrame akhir
 
+# Gabungkan semua hasil ke dalam DataFrame akhir
 df_messages = pd.DataFrame(all_messages)
+
+# delete beberapa kolom
+df_messages = df_messages.drop(columns=["interactive", "is_template"])
 
 # Pilih kolom yang ingin ditampilkan jika data tidak kosong
 if not df_messages.empty:
