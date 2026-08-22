@@ -81,42 +81,45 @@ while True:
 # Gabungkan semua hasil ke dalam DataFrame akhir
 df_messages = pd.DataFrame(all_messages)
 
-columns_to_show = [
-  "id",
-  "conversation_id",
-  "created_at",
-  "updated_at",
-  "phone_number",
-  #"chat_credits_used",
-  "sent_by_name",
-  "sent_by_type",
-  "message",
-  "status",
-  "inbox",
-  "ads_data"
-]
+# Convert all DataFrame columns to STRING
+
+def convert_to_string(x):
+    if x is None:
+        return None
+
+    # Convert lists/dictionaries to JSON string
+    if isinstance(x, (list, dict)):
+        return json.dumps(x, ensure_ascii=False)
+
+    # Convert NaN / NaT to None
+    if pd.isna(x):
+        return None
+
+    return str(x)
 
 
-execution_date_str = today_dt.strftime('%Y%m%d')
-file_path = f"cekat_full_conversations_{execution_date_str}.parquet"
-df_messages[columns_to_show].to_parquet(file_path, index=False)
-    
-print(f"✅ Cleaned data saved ke Parquet: {len(df_messages)} rows")
+df_upload = df_messages[["id","conversation_id","created_at","updated_at","phone_number","chat_credits_used","sent_by_name","sent_by_type","message","status","inbox","ads_data"]]
+
+for col in df_upload.columns:
+    df_upload[col] = df_upload[col].apply(convert_to_string)
+
+# Upload to BigQuery
 
 client = bigquery.Client()
 
-if not file_path or not os.path.exists(file_path):
-    print("❌ File parquet tidak ditemukan.")
-
 job_config = bigquery.LoadJobConfig(
-    source_format=bigquery.SourceFormat.PARQUET,
-    write_disposition=bigquery.WriteDisposition.WRITE_APPEND, # Create or Replace
+    write_disposition=bigquery.WriteDisposition.WRITE_APPEND
 )
 
-
-
-with open(file_path, "rb") as source_file:
-    job = client.load_table_from_file(source_file, PROD_TABLE_ID, job_config=job_config)
+job = client.load_table_from_dataframe(
+    df_upload,
+    PROD_TABLE_ID,
+    job_config=job_config
+)
 
 job.result()
-print(f"🚀 Data berhasil ditambahkan ke BigQuery. Total: {job.output_rows} baris.")
+
+print(
+    f"✅ Successfully inserted {job.output_rows} rows "
+    f"into {TABLE_ID}"
+)
