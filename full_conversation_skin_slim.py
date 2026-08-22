@@ -113,6 +113,8 @@ job_config = bigquery.LoadJobConfig(
     write_disposition=bigquery.WriteDisposition.WRITE_APPEND, # Create or Replace
 )
 
+df_messages["chat_credits_used"] = df_messages["chat_credits_used"].apply(lambda x: None if pd.isna(x) else str(x))
+
 with open(file_path, "rb") as source_file:
     job = client.load_table_from_file(source_file, PROD_TABLE_ID, job_config=job_config)
 
