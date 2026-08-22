@@ -87,7 +87,7 @@ columns_to_show = [
   "created_at",
   "updated_at",
   "phone_number",
-  "chat_credited_used",
+  "chat_credits_used",
   "sent_by_name",
   "sent_by_type",
   "message",
