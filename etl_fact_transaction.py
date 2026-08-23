@@ -18,7 +18,7 @@ def etl_erp_to_parquet():
     # Menggunakan datetime hari ini (karena dijalankan harian oleh cron)
     execution_date = datetime.utcnow()
     from_date = datetime(2024, 7, 1)
-    to_date = datetime(2024, 12, 31)
+    to_date = datetime(2024, 11, 30)
     #from_date = (execution_date - relativedelta(months=1)).replace(day=1)
     #to_date = execution_date
     
