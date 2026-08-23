@@ -28,8 +28,8 @@ ACCOUNTS = [
 
 def extract_erp_dynamic():
     execution_date = datetime.utcnow()
-    from_date = datetime(2023, 12, 31)
-    to_date = datetime(2024, 12, 31)
+    from_date = datetime(2025, 1, 1)
+    to_date = datetime(2025, 12, 31)
     # from_date = (execution_date - relativedelta(months=1)).replace(day=1)
     # to_date = execution_date
 
