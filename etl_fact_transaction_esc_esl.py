@@ -121,14 +121,14 @@ def load_data_to_staging(all_data, client):
 def transform_bq(client):
     query = f"""
         CREATE OR REPLACE TABLE `{PROD_TABLE_ID}` AS
-        SELECT DISTINCT *
+        SELECT *
         FROM `{PROD_TABLE_ID}`
         WHERE DATE(transaction_date) <= LAST_DAY(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH))
 
         UNION ALL
 
         -- Menggunakan EXCEPT untuk membuang kolom internal, dan REPLACE untuk mengubah tipe project menjadi FLOAT64
-        SELECT DISTINCT * EXCEPT(_company, _year, _month, _extracted_at)
+        SELECT * EXCEPT(_company, _year, _month, _extracted_at)
             REPLACE(SAFE_CAST(project AS FLOAT64) AS project)
         FROM `{RAW_TABLE_ID}`
         WHERE DATE(transaction_date) >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)
