@@ -17,8 +17,8 @@ REPORT_NAME = "Item-wise Sales History"
 def etl_erp_to_parquet():
     # Menggunakan datetime hari ini (karena dijalankan harian oleh cron)
     execution_date = datetime.utcnow()
-    from_date = datetime(2024, 12, 1)
-    to_date = datetime(2025, 5, 31)
+    from_date = datetime(2025, 6, 1)
+    to_date = datetime(2025, 12, 31)
     #from_date = (execution_date - relativedelta(months=1)).replace(day=1)
     #to_date = execution_date
     
