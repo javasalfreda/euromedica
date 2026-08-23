@@ -28,10 +28,10 @@ ACCOUNTS = [
 
 def extract_erp_dynamic():
     execution_date = datetime.utcnow()
-    from_date = datetime(2025, 1, 1)
-    to_date = datetime(2025, 12, 31)
+    from_date = datetime(2026, 1, 1)
+    #to_date = datetime(2026, 12, 31)
     # from_date = (execution_date - relativedelta(months=1)).replace(day=1)
-    # to_date = execution_date
+    to_date = execution_date
 
     print(f"📅 Periode ETL (Rolling Window): {from_date.strftime('%Y-%m-%d')} s/d {to_date.strftime('%Y-%m-%d')}")
     all_data = []
