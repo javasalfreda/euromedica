@@ -28,8 +28,10 @@ ACCOUNTS = [
 
 def extract_erp_dynamic():
     execution_date = datetime.utcnow()
-    from_date = (execution_date - relativedelta(months=1)).replace(day=1)
-    to_date = execution_date
+    from_date = datetime(2023, 12, 31)
+    to_date = datetime(2024, 12, 31)
+    # from_date = (execution_date - relativedelta(months=1)).replace(day=1)
+    # to_date = execution_date
 
     print(f"📅 Periode ETL (Rolling Window): {from_date.strftime('%Y-%m-%d')} s/d {to_date.strftime('%Y-%m-%d')}")
     all_data = []
@@ -118,27 +120,27 @@ def load_data_to_staging(all_data, client):
         os.remove(temp_parquet)
     return True
 
-def transform_bq(client):
-    query = f"""
-        CREATE OR REPLACE TABLE `{PROD_TABLE_ID}` AS
-        SELECT *
-        FROM `{PROD_TABLE_ID}`
-        WHERE DATE(transaction_date) <= LAST_DAY(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH))
+# def transform_bq(client):
+#     query = f"""
+#         CREATE OR REPLACE TABLE `{PROD_TABLE_ID}` AS
+#         SELECT *
+#         FROM `{PROD_TABLE_ID}`
+#         WHERE DATE(transaction_date) <= LAST_DAY(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH))
 
-        UNION ALL
+#         UNION ALL
 
-        -- Menggunakan EXCEPT untuk membuang kolom internal, dan REPLACE untuk mengubah tipe project menjadi FLOAT64
-        SELECT * EXCEPT(_company, _year, _month, _extracted_at)
-            REPLACE(SAFE_CAST(project AS FLOAT64) AS project)
-        FROM `{RAW_TABLE_ID}`
-        WHERE DATE(transaction_date) >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)
+#         -- Menggunakan EXCEPT untuk membuang kolom internal, dan REPLACE untuk mengubah tipe project menjadi FLOAT64
+#         SELECT * EXCEPT(_company, _year, _month, _extracted_at)
+#             REPLACE(SAFE_CAST(project AS FLOAT64) AS project)
+#         FROM `{RAW_TABLE_ID}`
+#         WHERE DATE(transaction_date) >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)
 
-        ORDER BY transaction_date DESC
-    """
-    print(f"⏳ Menjalankan transformasi SQL Incremental ke {PROD_TABLE_ID}...")
-    query_job = client.query(query)
-    query_job.result()
-    print("🎉 Transformasi sukses! Tabel fact_transaction_esc_esl telah diperbarui dengan aman.")
+#         ORDER BY transaction_date DESC
+#     """
+#     print(f"⏳ Menjalankan transformasi SQL Incremental ke {PROD_TABLE_ID}...")
+#     query_job = client.query(query)
+#     query_job.result()
+#     print("🎉 Transformasi sukses! Tabel fact_transaction_esc_esl telah diperbarui dengan aman.")
 
 if __name__ == "__main__":
     bq_client = bigquery.Client()
@@ -146,4 +148,4 @@ if __name__ == "__main__":
     # Alur Eksekusi Pipeline: Extract -> Load Staging -> Transform Prod
     extracted_data = extract_erp_dynamic()
     if load_data_to_staging(extracted_data, bq_client):
-        transform_bq(bq_client)
+        #transform_bq(bq_client)
