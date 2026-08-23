@@ -17,9 +17,9 @@ REPORT_NAME = "Item-wise Sales History"
 def etl_erp_to_parquet():
     # Menggunakan datetime hari ini (karena dijalankan harian oleh cron)
     execution_date = datetime.utcnow()
-    from_date = datetime(2026, 6, 1)
+    #from_date = datetime(2026, 6, 1)
     #to_date = datetime(2026, 5, 31)
-    #from_date = (execution_date - relativedelta(months=1)).replace(day=1)
+    from_date = (execution_date - relativedelta(months=1)).replace(day=1)
     to_date = execution_date
     
     # Di GitHub Actions, kita bisa simpan langsung di folder workspace saat ini
@@ -75,25 +75,25 @@ def load_parquet_to_bq(file_path, client):
     job.result()
     print(f"🚀 Berhasil memuat {job.output_rows} baris ke BigQuery.")
 
-# def transform_bq(client):
-#     query = """
-#         CREATE OR REPLACE TABLE `euromedica-495509.database.fact_transaction` AS
-#         SELECT *
-#         FROM `euromedica-495509.database.fact_transaction`
-#         WHERE DATE(transaction_date) <= LAST_DAY(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH))
+def transform_bq(client):
+    query = """
+        CREATE OR REPLACE TABLE `euromedica-495509.database.fact_transaction` AS
+        SELECT *
+        FROM `euromedica-495509.database.fact_transaction`
+        WHERE DATE(transaction_date) <= LAST_DAY(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH))
 
-#         UNION ALL
+        UNION ALL
 
-#         SELECT * EXCEPT(_extracted_at)
-#         FROM `euromedica-495509.raw.raw_trx`
-#         WHERE DATE(transaction_date) >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)
+        SELECT * EXCEPT(_extracted_at)
+        FROM `euromedica-495509.raw.raw_trx`
+        WHERE DATE(transaction_date) >= DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 1 MONTH), MONTH)
 
-#         ORDER BY transaction_date DESC
-#     """
-#     print("⏳ Menjalankan transformasi SQL di BigQuery...")
-#     query_job = client.query(query)
-#     query_job.result()
-#     print("🎉 Transformasi sukses! Tabel fact_transaction telah diperbarui.")
+        ORDER BY transaction_date DESC
+    """
+    print("⏳ Menjalankan transformasi SQL di BigQuery...")
+    query_job = client.query(query)
+    query_job.result()
+    print("🎉 Transformasi sukses! Tabel fact_transaction telah diperbarui.")
 
 if __name__ == "__main__":
     # Autentikasi otomatis membaca file json kredensial yang disiapkan oleh GitHub Actions
@@ -104,4 +104,4 @@ if __name__ == "__main__":
     saved_file = etl_erp_to_parquet()
     if saved_file:
         load_parquet_to_bq(saved_file, client)
-        #transform_bq(client)
+        transform_bq(client)
