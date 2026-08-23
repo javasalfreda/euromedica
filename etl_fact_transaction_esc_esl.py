@@ -147,5 +147,6 @@ if __name__ == "__main__":
     
     # Alur Eksekusi Pipeline: Extract -> Load Staging -> Transform Prod
     extracted_data = extract_erp_dynamic()
-    if load_data_to_staging(extracted_data, bq_client):
+    load_data_to_staging(extracted_data, bq_client)
+    #if load_data_to_staging(extracted_data, bq_client):
         #transform_bq(bq_client)
