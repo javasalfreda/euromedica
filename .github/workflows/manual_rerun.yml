@@ -51,11 +51,11 @@ jobs:
     # 2. LOGIKA KONDISIONAL (Hanya mengeksekusi script yang dipilih user)
     
     - name: Jalankan Boards Tracker
-      if: github.event.inputs.etl_script == 'etl_boards_tracker_skin_slim.py' || github.event.inputs.etl_script == 'Jalankan Semua Script Cekat AI'
+      if: github.event.inputs.etl_script == 'etl_boards_tracker_skin_slim.py'
       run: python etl_boards_tracker_skin_slim.py
 
     - name: Jalankan All Boards Cekat
-      if: github.event.inputs.etl_script == 'etl_all_boards_cekat.py' || github.event.inputs.etl_script == 'Jalankan Semua Script Cekat AI'
+      if: github.event.inputs.etl_script == 'etl_all_boards_cekat.py'
       run: python etl_all_boards_cekat.py
 
     - name: Jalankan Boards Calendar
