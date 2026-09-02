@@ -43,8 +43,8 @@ jobs:
       run: python etl_boards_tracker_skin_slim.py
 
     # 6. Jalankan ETL Cekat Kedua: All Boards Cekat
-    - name: Run All Boards Cekat Script
-      run: python etl_all_boards_cekat.py
+    # - name: Run All Boards Cekat Script
+    #   run: python etl_all_boards_cekat.py
 
     # 7. Jalankan ETL Cekat Ketiga: Boards Calendar Cekat
     - name: Run Boards Calendar Cekat Script
