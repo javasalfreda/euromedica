@@ -141,7 +141,7 @@ def load_staging_and_upsert(file_path, client):
             -- Masukkan seluruh data baru/ter-update dari staging ke tabel utama
             -- Menggunakan REPLACE agar tipe data ads_data diubah ke STRING tanpa merubah urutan kolom
             INSERT INTO `{MAIN_TABLE_ID}`
-            SELECT * REPLACE (SAFE_CAST(interactive AS INT64) AS interactive, CAST(ads_data AS STRING) AS ads_data)
+            SELECT * REPLACE (SAFE_CAST(interactive AS INT64) AS interactive, CAST(ads_data AS STRING) AS ads_data, CAST(NULL AS INT64) AS location)
             FROM `{STAGING_TABLE_ID}`;
         """
         client.query(upsert_query).result()
