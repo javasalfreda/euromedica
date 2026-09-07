@@ -14,8 +14,8 @@ headers = {"Authorization": f"Bearer {API_KEY}"}
 
 # Atur rentang tanggal sesuai kebutuhan Anda (format: YYYY-MM-DD)
 today_dt = datetime.utcnow()
-start_date_str = "2026-08-07"
-end_date_str = "2026-08-09"
+start_date_str = "2026-08-10"
+end_date_str = "2026-08-12"
 
 all_messages = []
 current_page = 1
