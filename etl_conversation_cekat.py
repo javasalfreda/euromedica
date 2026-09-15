@@ -174,7 +174,7 @@ def upsert_to_production(client):
 
         -- 2. Masukkan semua data baru/update dari staging ke tabel produksi
         INSERT INTO `{PROD_TABLE_ID}`
-        SELECT * FROM `{STAGING_TABLE_ID}`;
+        SELECT id, notes, labels, inbox_id, contact_id, created_at, inbox_name, resolved_at, contact_name, last_message, stage_status, contact_phone, first_message, handled_by_id, platform_type, resolved_by_id, additional_data, handled_by_name, resolved_by_name, created_at_wib FROM `{STAGING_TABLE_ID}`;
     """
     print(f"⏳ Menjalankan SQL UPSERT (Merge) ke tabel produksi {PROD_TABLE_ID}...")
     query_job = client.query(query)
