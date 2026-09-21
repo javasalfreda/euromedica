@@ -24,7 +24,7 @@ EXCLUDE_BOARDS = [
     'Tracker SKIN+', 'Tracker SLIM+', 'Tracker SKIN+ New', 'Tracker SLIM+ New',
     'Calendar IG SKIN+','Calendar IG SLIM+ (On Dev)','Calendar Tiktok SKIN+',
     'Calendar Tiktok SLIM+','Data Book SKIN+','Data Book SLIM+','Data Book SKIN+',
-    'IG SKIN (On Dev)','Tiktok SKIN+','Tiktok SLIM+','Tracker ESC','Sempvrna City Plaza Jatinegara',
+    'IG SKIN (On Dev)','Tiktok SKIN+','Tiktok SLIM+','Tracker ESC','Sempvrna City Plaza Jatinegara'
 ]
 
 # =========================
