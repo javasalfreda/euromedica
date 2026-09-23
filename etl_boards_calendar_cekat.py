@@ -118,11 +118,22 @@ def extract_and_clean_cekat():
 
     df['kode_qris'] = df.get('Kode Voucher QRIS', None)
 
-    # --- E. Aggregation ---
+    # --- E. Extract Agent dari created_by ---
+    def get_agent_name(value):
+        if isinstance(value, dict):
+            return value.get("name")
+        return None
+
+    if "created_by" in df.columns:
+        df["agent"] = df["created_by"].apply(get_agent_name)
+    else:
+        df["agent"] = None
+
+    # --- F. Aggregation ---
     df_final = (
         df.groupby([
             'created_at', 'booking_date', 'Phone', 
-            'board_name', 'visit', 'conv_status', 'kode_qris'
+            'board_name', 'visit', 'conv_status', 'kode_qris', 'agent'
         ], dropna=False)
         .agg({'collection': 'sum'})
         .reset_index()
