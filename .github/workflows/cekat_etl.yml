@@ -56,4 +56,4 @@ jobs:
 
     # 7. Jalankan ETL Cekat Kelima: Boards Calendar Cekat
     - name: Run Messages Cekat Script
-      run: python etl_messages_cekat_ads.py
+      run: python etl_messages_cekat_ads_v2.py
