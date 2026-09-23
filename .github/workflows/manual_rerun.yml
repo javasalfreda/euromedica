@@ -18,6 +18,7 @@ on:
           - 'etl_fact_transaction.py'
           - 'etl_fact_transaction_esc_esl.py'
           - 'full_conversation_skin_slim.py'
+          - 'etl_messages_cekat_ads_v2.py'
           - 'Jalankan Semua Script Cekat AI'
 
 # 🌟 TAMBAHKAN BLOK ENV DI SINI JUGA
@@ -85,5 +86,9 @@ jobs:
     - name: Jalankan Full Conversation SKIN+ SLIM+
       if: github.event.inputs.etl_script == 'full_conversation_skin_slim.py'
       run: python full_conversation_skin_slim.py
+
+    - name: Jalankan Messages v2
+      if: github.event.inputs.etl_script == 'etl_messages_cekat_ads_v2.py'
+      run: python etl_messages_cekat_ads_v2.py
 
 
