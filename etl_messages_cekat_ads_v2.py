@@ -98,8 +98,8 @@ def extract_messages_cekat():
     # start_date_str = (today_dt - timedelta(days=2)).strftime('%Y-%m-%d')
     # end_date_str = today_dt.strftime('%Y-%m-%d')
 
-    start_date_str = '2026-08-01'
-    end_date_str = '2026-08-31'
+    start_date_str = '2026-09-01'
+    end_date_str = '2026-09-30'
 
     logger.info(f"📌 Menarik data Ads dengan rentang fixed rolling: {start_date_str} s/d {end_date_str}")
 
