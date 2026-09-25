@@ -2,7 +2,7 @@ import os
 import time
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from google.cloud import bigquery
 
 # ==============================================================================
@@ -37,7 +37,7 @@ def extract_cekat_raw():
     all_data = []
     
     # Menggantikan context['ds_nodash'] bawaan Airflow dengan date UTC harian
-    execution_date = datetime.utcnow().strftime('%Y%m%d')
+    execution_date = datetime.now(timezone.utc).strftime('%Y%m%d')
     
     for board_name in TARGET_BOARDS:
         # Ambil ID secara dinamis dari BOARD_CONFIG berdasarkan nama

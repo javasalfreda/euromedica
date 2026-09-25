@@ -3,7 +3,7 @@ import time
 import json
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 
@@ -33,7 +33,7 @@ def extract_messages_cekat():
     current_page = 1
     
     # Mengganti logical_date Airflow dengan datetime UTC harian murni
-    today_dt = datetime.utcnow()
+    today_dt = datetime.now(timezone.utc)
     start_date_str = (today_dt - timedelta(days=2)).strftime('%Y-%m-%d')
     end_date_str = today_dt.strftime('%Y-%m-%d')
     

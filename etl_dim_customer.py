@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from google.cloud import bigquery
 
 # =========================
@@ -43,7 +43,7 @@ def fetch_and_save_parquet():
 
     final_data = []
     # Mengganti context['ds_nodash'] Airflow dengan tanggal UTC harian murni
-    execution_date = datetime.utcnow().strftime('%Y%m%d')
+    execution_date = datetime.now(timezone.utc).strftime('%Y%m%d')
     
     for acc in ACCOUNTS:
         brand = acc["brand"]

@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from dateutil.relativedelta import relativedelta
 from google.cloud import bigquery
 
@@ -16,7 +16,7 @@ REPORT_NAME = "Item-wise Sales History"
 
 def etl_erp_to_parquet():
     # Menggunakan datetime hari ini (karena dijalankan harian oleh cron)
-    execution_date = datetime.utcnow()
+    execution_date = datetime.now(timezone.utc)
     #from_date = datetime(2026, 6, 1)
     #to_date = datetime(2026, 5, 31)
     from_date = (execution_date - relativedelta(months=1)).replace(day=1)

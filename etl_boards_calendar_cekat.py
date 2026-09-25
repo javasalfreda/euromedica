@@ -4,7 +4,7 @@ import requests
 import json
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone
 from google.cloud import bigquery
 
 # =========================
@@ -33,7 +33,7 @@ EXCLUDE_BOARDS = [
 
 def extract_and_clean_cekat():
     all_data = []
-    execution_date = datetime.utcnow().strftime('%Y%m%d')
+    execution_date = datetime.now(timezone.utc).strftime('%Y%m%d')
     
     # --- A. Ambil List Boards ---
     boards_url = f"{BASE_URL}/api/crm/boards"

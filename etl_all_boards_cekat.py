@@ -2,7 +2,7 @@ import os
 import time
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from google.cloud import bigquery
 
 # =========================
@@ -51,7 +51,7 @@ def get_all_target_boards():
 
 def extract_cekat_raw():
     all_data = []
-    execution_date = datetime.utcnow().strftime('%Y%m%d')
+    execution_date = datetime.now(timezone.utc).strftime('%Y%m%d')
     
     target_boards = get_all_target_boards()
     

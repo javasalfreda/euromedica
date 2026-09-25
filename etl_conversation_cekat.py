@@ -2,7 +2,7 @@ import os
 import time
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from google.cloud import bigquery
 
 # =========================
@@ -33,7 +33,7 @@ def extract_and_clean_conversations():
     all_data = []
     request_count = 1  
     
-    today_dt = datetime.utcnow()
+    today_dt = datetime.now(timezone.utc)
     end_date = today_dt.strftime('%Y-%m-%d')                             
     start_date = (today_dt - timedelta(days=3)).strftime('%Y-%m-%d')  
     

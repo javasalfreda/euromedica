@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from dateutil.relativedelta import relativedelta
 from google.cloud import bigquery
 
@@ -27,7 +27,7 @@ ACCOUNTS = [
 ]
 
 def extract_erp_dynamic():
-    execution_date = datetime.utcnow()
+    execution_date = datetime.now(timezone.utc)
     #from_date = datetime(2026, 1, 1)
     #to_date = datetime(2026, 12, 31)
     from_date = (execution_date - relativedelta(months=1)).replace(day=1)
@@ -101,7 +101,7 @@ def load_data_to_staging(all_data, client):
     for col in df.select_dtypes(include=['object']).columns:
         df[col] = df[col].astype(str).replace(["nan", "None", "<NA>"], "")
 
-    today_str = datetime.utcnow().strftime("%Y%m%d")
+    today_str = datetime.now(timezone.utc).strftime("%Y%m%d")
     temp_parquet = f"temp_esc_esl_{today_str}.parquet"
     df.to_parquet(temp_parquet, index=False)
 
