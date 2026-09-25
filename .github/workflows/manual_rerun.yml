@@ -21,7 +21,6 @@ on:
           - 'etl_messages_cekat_ads_v2.py'
           - 'Jalankan Semua Script Cekat AI'
 
-# 🌟 TAMBAHKAN BLOK ENV DI SINI JUGA
 env:
   CEKAT_API_KEY: ${{ secrets.CEKAT_API_KEY }}
 
@@ -30,65 +29,64 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Setup standar (Hanya jalan sekali di awal)
-    - name: Checkout Repository Kode
-      uses: actions/checkout@v4
+      # 1. Setup standar
+      - name: Checkout Repository Kode
+        uses: actions/checkout@v7
 
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
 
-    - name: Install Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests pandas pyarrow python-dateutil google-cloud-bigquery numpy
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas pyarrow python-dateutil google-cloud-bigquery numpy
 
-    - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v2
-      with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    # 2. LOGIKA KONDISIONAL (Hanya mengeksekusi script yang dipilih user)
-    
-    - name: Jalankan Boards Tracker
-      if: github.event.inputs.etl_script == 'etl_boards_tracker_skin_slim.py'
-      run: python etl_boards_tracker_skin_slim.py
+      # 2. LOGIKA KONDISIONAL
+      # Hanya mengeksekusi script yang dipilih user
 
-    - name: Jalankan All Boards Cekat
-      if: github.event.inputs.etl_script == 'etl_all_boards_cekat.py'
-      run: python etl_all_boards_cekat.py
+      - name: Jalankan Boards Tracker
+        if: github.event.inputs.etl_script == 'etl_boards_tracker_skin_slim.py'
+        run: python etl_boards_tracker_skin_slim.py
 
-    - name: Jalankan Boards Calendar
-      if: github.event.inputs.etl_script == 'etl_boards_calendar_cekat.py' || github.event.inputs.etl_script == 'Jalankan Semua Script Cekat AI'
-      run: python etl_boards_calendar_cekat.py
+      - name: Jalankan All Boards Cekat
+        if: github.event.inputs.etl_script == 'etl_all_boards_cekat.py'
+        run: python etl_all_boards_cekat.py
 
-    - name: Jalankan Conversation
-      if: github.event.inputs.etl_script == 'etl_conversation_cekat.py' || github.event.inputs.etl_script == 'Jalankan Semua Script Cekat AI'
-      run: python etl_conversation_cekat.py
+      - name: Jalankan Boards Calendar
+        if: github.event.inputs.etl_script == 'etl_boards_calendar_cekat.py' || github.event.inputs.etl_script == 'Jalankan Semua Script Cekat AI'
+        run: python etl_boards_calendar_cekat.py
 
-    - name: Jalankan Messages
-      if: github.event.inputs.etl_script == 'etl_messages_cekat_ads.py' || github.event.inputs.etl_script == 'Jalankan Semua Script Cekat AI'
-      run: python etl_messages_cekat_ads.py
+      - name: Jalankan Conversation
+        if: github.event.inputs.etl_script == 'etl_conversation_cekat.py' || github.event.inputs.etl_script == 'Jalankan Semua Script Cekat AI'
+        run: python etl_conversation_cekat.py
 
-    - name: Jalankan Dim Customer
-      if: github.event.inputs.etl_script == 'etl_dim_customer.py'
-      run: python etl_dim_customer.py
+      - name: Jalankan Messages
+        if: github.event.inputs.etl_script == 'etl_messages_cekat_ads.py' || github.event.inputs.etl_script == 'Jalankan Semua Script Cekat AI'
+        run: python etl_messages_cekat_ads.py
 
-    - name: Jalankan Fact Transaction ESC ESL EHL
-      if: github.event.inputs.etl_script == 'etl_fact_transaction_esc_esl.py'
-      run: python etl_fact_transaction_esc_esl.py
+      - name: Jalankan Dim Customer
+        if: github.event.inputs.etl_script == 'etl_dim_customer.py'
+        run: python etl_dim_customer.py
 
-    - name: Jalankan Fact Transaction
-      if: github.event.inputs.etl_script == 'etl_fact_transaction.py'
-      run: python etl_fact_transaction.py
+      - name: Jalankan Fact Transaction ESC ESL EHL
+        if: github.event.inputs.etl_script == 'etl_fact_transaction_esc_esl.py'
+        run: python etl_fact_transaction_esc_esl.py
 
-    - name: Jalankan Full Conversation SKIN+ SLIM+
-      if: github.event.inputs.etl_script == 'full_conversation_skin_slim.py'
-      run: python full_conversation_skin_slim.py
+      - name: Jalankan Fact Transaction
+        if: github.event.inputs.etl_script == 'etl_fact_transaction.py'
+        run: python etl_fact_transaction.py
 
-    - name: Jalankan Messages v2
-      if: github.event.inputs.etl_script == 'etl_messages_cekat_ads_v2.py'
-      run: python etl_messages_cekat_ads_v2.py
+      - name: Jalankan Full Conversation SKIN+ SLIM+
+        if: github.event.inputs.etl_script == 'full_conversation_skin_slim.py'
+        run: python full_conversation_skin_slim.py
 
-
+      - name: Jalankan Messages v2
+        if: github.event.inputs.etl_script == 'etl_messages_cekat_ads_v2.py'
+        run: python etl_messages_cekat_ads_v2.py
