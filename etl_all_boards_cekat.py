@@ -102,7 +102,7 @@ def extract_cekat_raw():
     df = pd.DataFrame(all_data)
     
     # FIX ERROR PYARROW: Paksa semua kolom bertipe object/mixed menjadi string
-    for col in df.select_dtypes(include=['object']).columns:
+    for col in df.select_dtypes(include=['object', 'str']).columns:
         df[col] = df[col].astype(str).replace(["nan", "None", "<NA>"], "")
 
     if "item_id" in df.columns:

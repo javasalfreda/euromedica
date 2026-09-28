@@ -10,7 +10,7 @@ on:
 
 jobs:
   run-etl-pipeline:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       # 1. Checkout kode dari repositori

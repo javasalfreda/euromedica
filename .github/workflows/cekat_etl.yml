@@ -10,7 +10,7 @@ on:
 
 jobs:
   run-cekat-pipeline:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     env:
       CEKAT_API_KEY: ${{ secrets.CEKAT_API_KEY }}

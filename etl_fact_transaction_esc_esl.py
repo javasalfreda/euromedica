@@ -98,7 +98,7 @@ def load_data_to_staging(all_data, client):
     print(f"\n🚀 Memuat data rolling ke Staging ({RAW_TABLE_ID})...")
     df = pd.DataFrame(all_data)
 
-    for col in df.select_dtypes(include=['object']).columns:
+    for col in df.select_dtypes(include=['object', 'str']).columns:
         df[col] = df[col].astype(str).replace(["nan", "None", "<NA>"], "")
 
     today_str = datetime.now(timezone.utc).strftime("%Y%m%d")

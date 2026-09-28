@@ -129,7 +129,7 @@ def extract_and_clean_conversations():
     if "id" in df.columns:
         df = df.drop_duplicates(subset=["id"])
 
-    for col in df.select_dtypes(include=['object']).columns:
+    for col in df.select_dtypes(include=['object', 'str']).columns:
         df[col] = df[col].apply(lambda x: str(x) if isinstance(x, (list, dict)) else x)
         df[col] = df[col].astype(str).replace(["nan", "None", "<NA>"], "")
 
