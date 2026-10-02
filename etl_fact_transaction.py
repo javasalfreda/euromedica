@@ -17,10 +17,10 @@ REPORT_NAME = "Item-wise Sales History"
 def etl_erp_to_parquet():
     # Menggunakan datetime hari ini (karena dijalankan harian oleh cron)
     execution_date = datetime.now(timezone.utc)
-    #from_date = datetime(2026, 6, 1)
-    #to_date = datetime(2026, 5, 31)
-    from_date = (execution_date - relativedelta(months=1)).replace(day=1)
-    to_date = execution_date
+    from_date = datetime(2026, 2, 1)
+    to_date = datetime(2026, 2, 28)
+    # from_date = (execution_date - relativedelta(months=1)).replace(day=1)
+    # to_date = execution_date
     
     # Di GitHub Actions, kita bisa simpan langsung di folder workspace saat ini
     file_path = f"sales_history_up_to_{to_date.strftime('%Y%m%d')}.parquet"
