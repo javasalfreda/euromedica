@@ -1,125 +1,386 @@
-from datetime import datetime, timezone, timedelta
+
+from datetime import datetime, timezone
 import json
 import os
+import time
+import uuid
+
 import pandas as pd
 import requests
-import time
 from google.cloud import bigquery
 
-url = "https://api.cekat.ai/api/messages"
+
+# =========================================================
+# 1. KONFIGURASI
+# =========================================================
 
 API_KEY = os.getenv("CEKAT_API_KEY")
 
-headers = {"Authorization": f"Bearer {API_KEY}"}
+BASE_URL = "https://api.cekat.ai/api/messages"
 
-# Atur rentang tanggal sesuai kebutuhan Anda (format: YYYY-MM-DD)
-today_dt = datetime.now(timezone.utc)
-start_date_str = "2026-10-05"
-end_date_str = "2026-10-07"
+START_DATE = "2026-10-05"
+END_DATE = "2026-10-07"
 
-all_messages = []
-current_page = 1
-limit_per_page = 300
+PROJECT_ID = "euromedica-495509"
+DATASET_ID = "database"
 
-PROD_TABLE_ID = "euromedica-495509.database.full_conversation_skin_slim"
-
-print(
-    f"📌 Menarik data pesan dari tanggal {start_date_str} s/d"
-    f" {end_date_str}..."
+PROD_TABLE_ID = (
+    f"{PROJECT_ID}.{DATASET_ID}.full_conversation_skin_slim"
 )
 
-while True:
-  params = {
-      "start_date": start_date_str,
-      "end_date": end_date_str,
-      "page": current_page,
-      "limit": limit_per_page,
-  }
+LIMIT_PER_PAGE = 300
 
-  try:
-    response = requests.get(url, headers=headers, params=params, timeout=30)
-
-    if response.status_code == 200:
-      res_json = response.json()
-      items = res_json.get("data", [])
-
-      if not items:
-        print("✅ Semua halaman data berhasil ditarik.")
-        break
-
-      for item in items:
-        # Ambil phone_number dari nested contact jika ada
-        contact_info = item.get("contact")
-        if isinstance(contact_info, dict):
-          item["phone_number"] = contact_info.get("phone_number")
-        else:
-          item["phone_number"] = None
-
-      all_messages.extend(items)
-      print(f"📄 Page {current_page}: Berhasil menarik {len(items)} baris data.")
-
-      # Jika jumlah item kurang dari limit, berarti ini halaman terakhir
-      if len(items) < limit_per_page:
-        print("✅ Halaman terakhir tercapai.")
-        break
-
-      current_page += 1
-      time.sleep(1.5)  # Jeda sejenak agar tidak terkena rate limit
-
-    else:
-      print(
-          f"❌ Error {response.status_code} pada page {current_page} -"
-          f" {response.text}"
-      )
-      break
-
-  except Exception as e:
-    print(f"❌ Exception pada page {current_page}: {e}")
-    break
+COLUMNS = [
+    "id",
+    "conversation_id",
+    "created_at",
+    "updated_at",
+    "phone_number",
+    "chat_credits_used",
+    "sent_by_name",
+    "sent_by_type",
+    "message",
+    "status",
+    "inbox",
+    "ads_data"
+]
 
 
-# Gabungkan semua hasil ke dalam DataFrame akhir
-df_messages = pd.DataFrame(all_messages)
+# =========================================================
+# 2. HELPER: KONVERSI DATA KE STRING
+# =========================================================
 
-# Convert all DataFrame columns to STRING
-
-def convert_to_string(x):
-    if x is None:
+def convert_to_string(value):
+    if value is None:
         return None
 
-    # Convert lists/dictionaries to JSON string
-    if isinstance(x, (list, dict)):
-        return json.dumps(x, ensure_ascii=False)
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, ensure_ascii=False)
 
-    # Convert NaN / NaT to None
-    if pd.isna(x):
+    if pd.isna(value):
         return None
 
-    return str(x)
+    return str(value)
 
 
-df_upload = df_messages[["id","conversation_id","created_at","updated_at","phone_number","chat_credits_used","sent_by_name","sent_by_type","message","status","inbox","ads_data"]]
+# =========================================================
+# 3. FETCH DATA DARI CEKAT API
+# =========================================================
 
-for col in df_upload.columns:
-    df_upload[col] = df_upload[col].apply(convert_to_string)
+def fetch_messages():
 
-# Upload to BigQuery
+    if not API_KEY:
+        raise ValueError(
+            "CEKAT_API_KEY belum tersedia di environment."
+        )
 
-client = bigquery.Client()
+    headers = {
+        "Authorization": f"Bearer {API_KEY}"
+    }
 
-job_config = bigquery.LoadJobConfig(
-    write_disposition=bigquery.WriteDisposition.WRITE_APPEND
-)
+    all_messages = []
+    current_page = 1
 
-job = client.load_table_from_dataframe(
-    df_upload,
-    PROD_TABLE_ID,
-    job_config=job_config
-)
+    print(
+        f"📌 Menarik data pesan dari "
+        f"{START_DATE} s/d {END_DATE}"
+    )
 
-job.result()
+    with requests.Session() as session:
 
-print(
-    f"✅ Successfully inserted {job.output_rows} rows "
-    f"into {PROD_TABLE_ID}"
-)
+        while True:
+
+            params = {
+                "start_date": START_DATE,
+                "end_date": END_DATE,
+                "page": current_page,
+                "limit": LIMIT_PER_PAGE
+            }
+
+            try:
+                response = session.get(
+                    BASE_URL,
+                    headers=headers,
+                    params=params,
+                    timeout=30
+                )
+
+                response.raise_for_status()
+
+                res_json = response.json()
+                items = res_json.get("data", [])
+
+                if not isinstance(items, list):
+                    raise ValueError(
+                        "Format data API tidak sesuai."
+                    )
+
+                if not items:
+                    print("✅ Semua halaman berhasil ditarik.")
+                    break
+
+                for item in items:
+
+                    contact_info = item.get("contact")
+
+                    if isinstance(contact_info, dict):
+                        item["phone_number"] = (
+                            contact_info.get("phone_number")
+                        )
+                    else:
+                        item["phone_number"] = None
+
+                all_messages.extend(items)
+
+                print(
+                    f"📄 Page {current_page}: "
+                    f"{len(items)} baris berhasil ditarik."
+                )
+
+                if len(items) < LIMIT_PER_PAGE:
+                    print("✅ Halaman terakhir tercapai.")
+                    break
+
+                current_page += 1
+                time.sleep(1.5)
+
+            except Exception as e:
+                raise RuntimeError(
+                    f"Gagal mengambil data pada "
+                    f"page {current_page}: {e}"
+                ) from e
+
+    return all_messages
+
+
+# =========================================================
+# 4. TRANSFORMASI DAN DEDUPLIKASI DATA
+# =========================================================
+
+def prepare_dataframe(all_messages):
+
+    df = pd.DataFrame(all_messages)
+
+    if df.empty:
+        return pd.DataFrame(columns=COLUMNS)
+
+    # Pilih kolom sesuai schema BigQuery
+    df_upload = df.reindex(columns=COLUMNS).copy()
+
+    # Konversi seluruh kolom ke STRING
+    for col in COLUMNS:
+        df_upload[col] = df_upload[col].apply(
+            convert_to_string
+        )
+
+    # Validasi ID pesan
+    invalid_ids = (
+        df_upload["id"].isna()
+        | df_upload["id"].fillna("").str.strip().eq("")
+    )
+
+    if invalid_ids.any():
+        raise ValueError(
+            f"Ditemukan {invalid_ids.sum()} pesan "
+            f"tanpa ID yang valid."
+        )
+
+    total_before = len(df_upload)
+
+    # Konversi updated_at untuk menentukan versi terbaru
+    df_upload["_updated_ts"] = pd.to_datetime(
+        df_upload["updated_at"],
+        errors="coerce",
+        utc=True
+    )
+
+    # Urutkan berdasarkan updated_at
+    df_upload = df_upload.sort_values(
+        by="_updated_ts",
+        ascending=True,
+        na_position="first",
+        kind="stable"
+    )
+
+    # Pertahankan satu pesan per ID (versi terbaru)
+    df_upload = df_upload.drop_duplicates(
+        subset=["id"],
+        keep="last"
+    )
+
+    # Hapus kolom bantu
+    df_upload = df_upload.drop(
+        columns=["_updated_ts"]
+    )
+
+    print(f"📊 Total data API: {total_before}")
+    print(f"📊 Data unik: {len(df_upload)}")
+    print(
+        f"📊 Duplikat dihapus: "
+        f"{total_before - len(df_upload)}"
+    )
+
+    return df_upload
+
+
+# =========================================================
+# 5. UPLOAD KE STAGING DAN MERGE KE PRODUKSI
+# =========================================================
+
+def upload_to_bigquery(df_upload):
+
+    if df_upload.empty:
+        print("⚠️ Tidak ada data untuk diupload.")
+        return
+
+    client = bigquery.Client(project=PROJECT_ID)
+
+    dataset = client.get_dataset(
+        f"{PROJECT_ID}.{DATASET_ID}"
+    )
+
+    location = dataset.location
+
+    # Nama staging unik untuk setiap eksekusi
+    staging_name = (
+        f"_staging_full_conversation_skin_slim_"
+        f"{uuid.uuid4().hex[:12]}"
+    )
+
+    STAGING_TABLE_ID = (
+        f"{PROJECT_ID}.{DATASET_ID}.{staging_name}"
+    )
+
+    # Schema staging
+    schema = [
+        bigquery.SchemaField(col, "STRING")
+        for col in COLUMNS
+    ]
+
+    job_config = bigquery.LoadJobConfig(
+        schema=schema,
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE
+    )
+
+    try:
+
+        # -------------------------------------------------
+        # A. UPLOAD DATA KE STAGING
+        # -------------------------------------------------
+
+        print("📤 Upload data ke staging...")
+
+        load_job = client.load_table_from_dataframe(
+            df_upload,
+            STAGING_TABLE_ID,
+            job_config=job_config,
+            location=location
+        )
+
+        load_job.result()
+
+        print(
+            f"✅ {load_job.output_rows} baris "
+            f"berhasil masuk staging."
+        )
+
+        # -------------------------------------------------
+        # B. GENERATE QUERY MERGE
+        # -------------------------------------------------
+
+        update_columns = [
+            col for col in COLUMNS
+            if col != "id"
+        ]
+
+        update_set = ",\n        ".join(
+            f"T.`{col}` = S.`{col}`"
+            for col in update_columns
+        )
+
+        insert_columns = ", ".join(
+            f"`{col}`"
+            for col in COLUMNS
+        )
+
+        insert_values = ", ".join(
+            f"S.`{col}`"
+            for col in COLUMNS
+        )
+
+        # -------------------------------------------------
+        # C. MERGE KE TABEL PRODUKSI
+        # -------------------------------------------------
+
+        merge_query = f"""
+        MERGE `{PROD_TABLE_ID}` AS T
+        USING `{STAGING_TABLE_ID}` AS S
+
+        ON T.id = S.id
+
+        WHEN MATCHED AND (
+            SAFE_CAST(S.updated_at AS TIMESTAMP)
+                > SAFE_CAST(T.updated_at AS TIMESTAMP)
+
+            OR (
+                SAFE_CAST(T.updated_at AS TIMESTAMP) IS NULL
+                AND
+                SAFE_CAST(S.updated_at AS TIMESTAMP) IS NOT NULL
+            )
+        )
+        THEN UPDATE SET
+            {update_set}
+
+        WHEN NOT MATCHED THEN
+            INSERT ({insert_columns})
+            VALUES ({insert_values})
+        """
+
+        print("🔄 Menjalankan MERGE ke tabel produksi...")
+
+        merge_job = client.query(
+            merge_query,
+            location=location
+        )
+
+        merge_job.result()
+
+        print("✅ MERGE berhasil dijalankan.")
+        print(
+            f"📊 Total baris terdampak: "
+            f"{merge_job.num_dml_affected_rows}"
+        )
+
+    finally:
+
+        # -------------------------------------------------
+        # D. HAPUS STAGING
+        # -------------------------------------------------
+
+        client.delete_table(
+            STAGING_TABLE_ID,
+            not_found_ok=True
+        )
+
+        print("🗑️ Staging table telah dibersihkan.")
+
+
+# =========================================================
+# 6. MAIN EXECUTION
+# =========================================================
+
+def main():
+
+    print("🚀 Memulai ETL Full Conversation SKIN SLIM")
+
+    all_messages = fetch_messages()
+
+    df_upload = prepare_dataframe(all_messages)
+
+    upload_to_bigquery(df_upload)
+
+    print("🎉 ETL selesai!")
+
+
+if __name__ == "__main__":
+    main()
