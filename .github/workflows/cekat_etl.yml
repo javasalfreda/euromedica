@@ -39,9 +39,9 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # 5. Jalankan ETL Cekat Pertama: Boards Tracker Skin & Slim
-      - name: Run Cekat Boards Tracker Script
-        run: python etl_boards_tracker_skin_slim.py
+      # 5. Jalankan ETL Cekat Pertama: Boards Tracker Skin & Slim (Optimized)
+      - name: Run Cekat Boards Tracker Script (Optimized)
+        run: python etl_boards_tracker_skin_slim_optimized.py
 
       # 6. Jalankan ETL Cekat Kedua: All Boards Cekat
       # - name: Run All Boards Cekat Script

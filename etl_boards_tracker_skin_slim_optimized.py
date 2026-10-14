@@ -9,7 +9,7 @@ from typing import List, Dict, Tuple, Optional
 
 API_KEY = os.getenv("CEKAT_API_KEY")
 BASE_URL = "https://api.cekat.ai"
-TABLE_ID = "euromedica-495509.raw.boards_tracker_skin_slim_test"
+TABLE_ID = "euromedica-495509.raw.boards_tracker_skin_slim"
 
 HEADERS = {
     "Authorization": f"Bearer {API_KEY}",
