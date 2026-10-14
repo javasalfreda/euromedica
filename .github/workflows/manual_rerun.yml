@@ -10,6 +10,7 @@ on:
         default: 'Pilih salah satu...'
         options:
           - 'etl_boards_tracker_skin_slim.py'
+          - 'etl_boards_tracker_skin_slim_optimized.py'
           - 'etl_all_boards_cekat.py'
           - 'etl_boards_calendar_cekat.py'
           - 'etl_conversation_cekat.py'
@@ -54,6 +55,10 @@ jobs:
       - name: Jalankan Boards Tracker
         if: github.event.inputs.etl_script == 'etl_boards_tracker_skin_slim.py'
         run: python etl_boards_tracker_skin_slim.py
+
+      - name: Jalankan Boards Tracker Optimized
+        if: github.event.inputs.etl_script == 'etl_boards_tracker_skin_slim_optimized.py'
+        run: python etl_boards_tracker_skin_slim_optimized.py
 
       - name: Jalankan All Boards Cekat
         if: github.event.inputs.etl_script == 'etl_all_boards_cekat.py'
