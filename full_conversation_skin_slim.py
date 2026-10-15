@@ -1,5 +1,5 @@
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import time
@@ -18,8 +18,11 @@ API_KEY = os.getenv("CEKAT_API_KEY")
 
 BASE_URL = "https://api.cekat.ai/api/messages"
 
-START_DATE = "2026-10-05"
-END_DATE = "2026-10-07"
+# Rentang dinamis 2 hari ke belakang berbasis WIB (UTC+7)
+WIB_TZ = timezone(timedelta(hours=7))
+_now_wib = datetime.now(WIB_TZ)
+START_DATE = (_now_wib - timedelta(days=2)).strftime("%Y-%m-%d")
+END_DATE = _now_wib.strftime("%Y-%m-%d")
 
 PROJECT_ID = "euromedica-495509"
 DATASET_ID = "database"
