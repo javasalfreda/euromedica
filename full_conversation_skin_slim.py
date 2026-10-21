@@ -18,7 +18,7 @@ API_KEY = os.getenv("CEKAT_API_KEY")
 BASE_URL = "https://api.cekat.ai/api/messages"
 
 START_DATE = "2026-09-19"
-END_DATE = "2026-09-26"
+END_DATE = "2026-09-21"
 
 PROJECT_ID = "euromedica-495509"
 DATASET_ID = "database"
