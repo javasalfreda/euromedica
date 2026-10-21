@@ -32,7 +32,7 @@ def login():
 
 def extract_sales_history(session):
     all_dfs = []
-    today = datetime.now(timezone.utc)
+    today = datetime.now(timezone.utc).replace(tzinfo=None)
     current = datetime(START_YEAR, 1, 1)
 
     while current <= today:
