@@ -91,7 +91,7 @@ jobs:
 
       - name: Jalankan Fact Transaction Testing
         if: github.event.inputs.etl_script == 'etl_fact_transaction_testing.py'
-        run: python etl_fact_transaction.py
+        run: python etl_fact_transaction_testing.py
 
       - name: Jalankan Full Conversation SKIN+ SLIM+
         if: github.event.inputs.etl_script == 'full_conversation_skin_slim.py'
