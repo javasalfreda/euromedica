@@ -89,9 +89,9 @@ jobs:
         if: github.event.inputs.etl_script == 'etl_fact_transaction.py'
         run: python etl_fact_transaction.py
 
-      - name: Jalankan Fact Transaction Testing
+      - name: Jalankan Fact Transaction Testing (Oktober 2026)
         if: github.event.inputs.etl_script == 'etl_fact_transaction_testing.py'
-        run: python etl_fact_transaction_testing.py
+        run: python etl_fact_transaction_testing.py --month 2026-10
 
       - name: Jalankan Full Conversation SKIN+ SLIM+
         if: github.event.inputs.etl_script == 'full_conversation_skin_slim.py'
