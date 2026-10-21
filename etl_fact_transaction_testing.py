@@ -196,6 +196,11 @@ def build_mapping(session, client):
 
     so_posting["posting_date"] = pd.to_datetime(so_posting["posting_date"])
 
+    try:
+        client.delete_table(MAPPING_TABLE_ID, not_found_ok=True)
+    except Exception:
+        pass
+
     job_config = bigquery.LoadJobConfig(
         write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
         autodetect=True,
@@ -309,14 +314,26 @@ def run_monthly(session, client, month_str):
 
     result_df["_extracted_at"] = datetime.now()
 
+    if "transaction_date" in result_df.columns:
+        result_df["transaction_date"] = pd.to_datetime(result_df["transaction_date"], errors="coerce").dt.date
+    if "posting_date" in result_df.columns:
+        result_df["posting_date"] = pd.to_datetime(result_df["posting_date"], errors="coerce").dt.date
+
     file_path = f"fact_txn_testing_{month_str}.parquet"
     result_df.to_parquet(file_path, index=False)
     print(f"Parquet tersimpan: {file_path} ({len(result_df)} rows, {len(result_df.columns)} cols)")
 
     if client:
+        try:
+            client.delete_table(TABLE_ID, not_found_ok=True)
+            print(f"Tabel lama dihapus: {TABLE_ID}")
+        except Exception:
+            pass
+
         job_config = bigquery.LoadJobConfig(
             source_format=bigquery.SourceFormat.PARQUET,
             write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+            autodetect=True,
         )
         with open(file_path, "rb") as f:
             job = client.load_table_from_file(f, TABLE_ID, job_config=job_config)
@@ -351,15 +368,26 @@ def run_all_months(session, client):
     print(f"Matched posting_date: {matched}/{len(result_df)} ({matched/len(result_df)*100:.1f}%)")
 
     result_df["_extracted_at"] = datetime.now()
-    result_df["posting_date"] = result_df["posting_date"].dt.date
+
+    if "transaction_date" in result_df.columns:
+        result_df["transaction_date"] = pd.to_datetime(result_df["transaction_date"], errors="coerce").dt.date
+    if "posting_date" in result_df.columns:
+        result_df["posting_date"] = pd.to_datetime(result_df["posting_date"], errors="coerce").dt.date
 
     file_path = "fact_txn_testing_all.parquet"
     result_df.to_parquet(file_path, index=False)
     print(f"Parquet: {file_path}")
 
+    try:
+        client.delete_table(TABLE_ID, not_found_ok=True)
+        print(f"Tabel lama dihapus: {TABLE_ID}")
+    except Exception:
+        pass
+
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.PARQUET,
         write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        autodetect=True,
     )
     with open(file_path, "rb") as f:
         job = client.load_table_from_file(f, TABLE_ID, job_config=job_config)
