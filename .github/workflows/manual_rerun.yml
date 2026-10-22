@@ -20,6 +20,9 @@ on:
           - 'etl_fact_transaction_testing.py'
           - 'etl_fact_transaction_testing.py --build-map'
           - 'etl_fact_transaction_testing.py --all-months'
+          - 'etl_fact_transaction_testing.py --reset --year 2022'
+          - 'etl_fact_transaction_testing.py --reset --year 2026'
+          - 'etl_fact_transaction_testing.py --year 2026'
           - 'etl_fact_transaction_testing.py --reset --all-months'
           - 'etl_fact_transaction_esc_esl.py'
           - 'full_conversation_skin_slim.py'
@@ -108,6 +111,18 @@ jobs:
       - name: Backfill Fact Transaction Testing (2022 -> sekarang)
         if: github.event.inputs.etl_script == 'etl_fact_transaction_testing.py --all-months'
         run: python etl_fact_transaction_testing.py --all-months
+
+      - name: Backfill Fact Transaction Testing (reset + tahun 2022)
+        if: github.event.inputs.etl_script == 'etl_fact_transaction_testing.py --reset --year 2022'
+        run: python etl_fact_transaction_testing.py --reset --year 2022
+
+      - name: Backfill Fact Transaction Testing (reset + tahun 2026)
+        if: github.event.inputs.etl_script == 'etl_fact_transaction_testing.py --reset --year 2026'
+        run: python etl_fact_transaction_testing.py --reset --year 2026
+
+      - name: Backfill Fact Transaction Testing (tahun 2026, resume)
+        if: github.event.inputs.etl_script == 'etl_fact_transaction_testing.py --year 2026'
+        run: python etl_fact_transaction_testing.py --year 2026
 
       - name: Backfill Fact Transaction Testing (reset + 2022 -> sekarang)
         if: github.event.inputs.etl_script == 'etl_fact_transaction_testing.py --reset --all-months'
