@@ -5,6 +5,8 @@ import time
 import argparse
 import requests
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from datetime import datetime, timezone, timedelta
 from dateutil.relativedelta import relativedelta
 from google.cloud import bigquery
@@ -190,6 +192,27 @@ def extract_doctype(session, doctype, fields, filters=None, label=None):
 # ──────────────────────────────────────────────
 #  MODE 1: Build mapping -> BQ
 # ──────────────────────────────────────────────
+def save_mapping(client, so_posting):
+    if so_posting.empty:
+        print("Mapping kosong, tidak disimpan.")
+        return
+
+    df = so_posting[["sales_order", "posting_date"]].copy()
+    df["posting_date"] = pd.to_datetime(df["posting_date"])
+
+    try:
+        client.delete_table(MAPPING_TABLE_ID, not_found_ok=True)
+    except Exception:
+        pass
+
+    job_config = bigquery.LoadJobConfig(
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        autodetect=True,
+    )
+    client.load_table_from_dataframe(df, MAPPING_TABLE_ID, job_config=job_config).result()
+    print(f"Mapping tersimpan -> {MAPPING_TABLE_ID} ({len(df)} rows)")
+
+
 def build_mapping(session, client):
     print("\n=== [MODE] Build sales_order -> posting_date mapping ===")
 
@@ -253,25 +276,20 @@ def build_mapping(session, client):
 
     so_posting["posting_date"] = pd.to_datetime(so_posting["posting_date"])
 
-    try:
-        client.delete_table(MAPPING_TABLE_ID, not_found_ok=True)
-    except Exception:
-        pass
-
-    job_config = bigquery.LoadJobConfig(
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-        autodetect=True,
-    )
-    client.load_table_from_dataframe(so_posting, MAPPING_TABLE_ID, job_config=job_config).result()
-    print(f"\nMapping tersimpan -> {MAPPING_TABLE_ID}")
+    save_mapping(client, so_posting)
 
 
 # ──────────────────────────────────────────────
 #  MODE 2: Load mapping dari BQ
 # ──────────────────────────────────────────────
 def load_mapping_from_bq(client):
-    query = f"SELECT sales_order, posting_date FROM `{MAPPING_TABLE_ID}`"
-    df = client.query(query).to_dataframe()
+    rows = list(client.query(
+        f"SELECT sales_order, posting_date FROM `{MAPPING_TABLE_ID}`"
+    ).result())
+    df = pd.DataFrame(
+        [(r["sales_order"], r["posting_date"]) for r in rows],
+        columns=["sales_order", "posting_date"],
+    )
     print(f"Mapping dimuat dari BQ: {len(df)} rows")
     return df
 
@@ -282,12 +300,12 @@ def load_mapping_from_bq(client):
 def load_mapping_auto(session, client, from_posting_date=None, max_age_days=MAPPING_MAX_AGE_DAYS):
     if client is not None:
         try:
-            meta = client.query(
+            meta = list(client.query(
                 f"SELECT last_modified_time FROM `{PROJECT}.database.__TABLES__` "
                 f"WHERE table_id = 'dim_so_posting_date'"
-            ).to_dataframe()
-            if not meta.empty:
-                ts = pd.Timestamp(meta.iloc[0, 0])
+            ).result())
+            if meta:
+                ts = pd.Timestamp(meta[0]["last_modified_time"])
                 if ts.tzinfo is None:
                     ts = ts.tz_localize("UTC")
                 age_days = (pd.Timestamp.now(tz="UTC") - ts).total_seconds() / 86400
@@ -297,7 +315,16 @@ def load_mapping_auto(session, client, from_posting_date=None, max_age_days=MAPP
                 print(f"Mapping cache usia {age_days:.1f} hari (> {max_age_days}) -> build in-memory")
         except Exception as e:
             print(f"Mapping cache tidak terbaca ({e}) -> build in-memory")
-    return build_mapping_inmemory(session, from_posting_date=from_posting_date)
+
+    mapping_df = build_mapping_inmemory(session, from_posting_date=from_posting_date)
+
+    if client is not None and from_posting_date is None and not mapping_df.empty:
+        try:
+            save_mapping(client, mapping_df)
+        except Exception as e:
+            print(f"Gagal simpan mapping ke BQ: {e}")
+
+    return mapping_df
 
 
 # ──────────────────────────────────────────────
@@ -378,6 +405,44 @@ def build_mapping_inmemory(session, from_posting_date=None):
 # ──────────────────────────────────────────────
 #  TRANSFORM: merge mapping + normalisasi tipe
 # ──────────────────────────────────────────────
+DATE_COLS = {"transaction_date", "posting_date"}
+NUMERIC_COLS = {
+    "quantity", "net_rate", "net_amount", "price_list_rate",
+    "dpp_retail", "ppn_retail", "collection", "billed_amount",
+    "delivered_quantity",
+}
+
+
+def _to_string(value):
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def normalize_types(df):
+    for col in df.columns:
+        if col in DATE_COLS:
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+        elif col in NUMERIC_COLS:
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("float64")
+        elif col == "_extracted_at":
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+        else:
+            df[col] = df[col].map(_to_string).astype("string")
+    return df
+
+
 def prepare_df(sales_df, mapping_df):
     result_df = sales_df.merge(mapping_df, on="sales_order", how="left")
 
@@ -387,12 +452,26 @@ def prepare_df(sales_df, mapping_df):
 
     result_df["_extracted_at"] = datetime.now()
 
-    if "transaction_date" in result_df.columns:
-        result_df["transaction_date"] = pd.to_datetime(result_df["transaction_date"], errors="coerce").dt.date
-    if "posting_date" in result_df.columns:
-        result_df["posting_date"] = pd.to_datetime(result_df["posting_date"], errors="coerce").dt.date
+    return normalize_types(result_df)
 
-    return result_df
+
+def write_parquet(df, file_path):
+    arrays = []
+    for col in df.columns:
+        series = df[col]
+        if col in DATE_COLS:
+            values = [None if pd.isna(v) else v for v in series]
+            arrays.append(pa.array(values, type=pa.date32()))
+        elif col in NUMERIC_COLS:
+            arrays.append(pa.array(pd.to_numeric(series, errors="coerce"), type=pa.float64()))
+        elif col == "_extracted_at":
+            arrays.append(pa.array(pd.to_datetime(series, errors="coerce"), type=pa.timestamp("us")))
+        else:
+            values = [None if pd.isna(v) else str(v) for v in series]
+            arrays.append(pa.array(values, type=pa.string()))
+
+    table = pa.Table.from_arrays(arrays, names=list(df.columns))
+    pq.write_table(table, file_path)
 
 
 # ──────────────────────────────────────────────
@@ -465,7 +544,7 @@ def run_month(session, client, mapping_df, year, month, keep_parquet=False):
     result_df = prepare_df(sales_df, mapping_df)
 
     file_path = f"fact_txn_testing_{month_str}.parquet"
-    result_df.to_parquet(file_path, index=False)
+    write_parquet(result_df, file_path)
     print(f"  parquet: {file_path} ({len(result_df)} rows, {len(result_df.columns)} cols)")
 
     if client:
@@ -537,6 +616,8 @@ if __name__ == "__main__":
     parser.add_argument("--month", type=str, help="ETL 1 bulan, format: YYYY-MM (contoh: 2026-09)")
     parser.add_argument("--range", nargs=2, metavar=("DARI", "SAMPAI"),
                         help="Backfill rentang bulan, contoh: --range 2022-01 2025-12")
+    parser.add_argument("--year", type=int,
+                        help="Backfill 1 tahun penuh, contoh: --year 2022")
     parser.add_argument("--all-months", action="store_true",
                         help=f"Backfill semua bulan dari {START_YEAR} sampai sekarang")
     parser.add_argument("--force", action="store_true",
@@ -549,13 +630,20 @@ if __name__ == "__main__":
                         help="Hanya buat parquet lokal, tanpa load ke BQ")
     args = parser.parse_args()
 
-    if not any([args.build_map, args.month, args.range, args.all_months]):
+    if not any([args.build_map, args.month, args.range, args.year, args.all_months]):
         print("Gunakan salah satu:")
         print("  --build-map                  Build mapping ke BQ (sekali jalan)")
         print("  --month 2026-01              ETL 1 bulan (replace bulan itu)")
+        print("  --year 2022                  Backfill 1 tahun penuh")
         print("  --range 2022-01 2026-10      Backfill rentang bulan")
         print("  --all-months                 Backfill semua bulan sampai sekarang")
         sys.exit(1)
+
+    if sum(bool(x) for x in (args.month, args.range, args.year, args.all_months)) > 1:
+        sys.exit("Pilih salah satu mode: --month, --year, --range, atau --all-months")
+
+    if args.build_map and any([args.month, args.range, args.year, args.all_months]):
+        sys.exit("--build-map tidak bisa digabung dengan mode backfill")
 
     t_start = time.time()
 
@@ -594,6 +682,9 @@ if __name__ == "__main__":
                 start = (START_YEAR, 1)
                 now = datetime.now(timezone.utc)
                 end = (now.year, now.month)
+            elif args.year:
+                start = (args.year, 1)
+                end = (args.year, 12)
             else:
                 start = parse_month(args.range[0])
                 end = parse_month(args.range[1])
