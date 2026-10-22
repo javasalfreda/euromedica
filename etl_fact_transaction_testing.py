@@ -37,10 +37,13 @@ def login():
 # ──────────────────────────────────────────────
 #  EXTRACT: Sales History (report, per bulan)
 # ──────────────────────────────────────────────
-def extract_sales_history_month(session, year, month):
+def extract_sales_history_month(session, year, month, to_date=None):
     from_date = f"{year}-{month:02d}-01"
     month_end = (datetime(year, month, 1) + relativedelta(months=1)) - timedelta(days=1)
-    to_date = month_end.strftime("%Y-%m-%d")
+
+    today = datetime.now(timezone.utc).replace(tzinfo=None)
+    default_to = min(today, month_end + relativedelta(months=1))
+    to_date = to_date or default_to.strftime("%Y-%m-%d")
 
     t0 = time.time()
     r = session.post(REPORT_URL, json={
@@ -51,16 +54,23 @@ def extract_sales_history_month(session, year, month):
             "to_date": to_date,
         }),
         "ignore_prepared_report": 1,
-    }, timeout=120)
+    }, timeout=180)
     r.raise_for_status()
     result = r.json().get("message", {}).get("result", [])
 
     if result and len(result) > 1:
         df = pd.DataFrame(result[:-1])
-        print(f"  {from_date}: {len(df)} rows ({time.time()-t0:.1f}s)")
+        if "transaction_date" in df.columns:
+            td = pd.to_datetime(df["transaction_date"], errors="coerce")
+            mask = (td >= pd.Timestamp(from_date)) & (td <= pd.Timestamp(month_end))
+            outside = int((~mask).sum())
+            df = df[mask].reset_index(drop=True)
+            if outside:
+                print(f"  filter transaction_date {from_date}..{month_end:%Y-%m-%d}: buang {outside} baris di luar bulan")
+        print(f"  {from_date}..{to_date}: {len(df)} rows ({time.time()-t0:.1f}s)")
         return df
 
-    print(f"  {from_date}: 0 rows ({time.time()-t0:.1f}s)")
+    print(f"  {from_date}..{to_date}: 0 rows ({time.time()-t0:.1f}s)")
     return pd.DataFrame()
 
 
