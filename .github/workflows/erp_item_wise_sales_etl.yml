@@ -1,4 +1,4 @@
-name: ERP Warehouse Fact Transaction ETL
+name: ERP Item-wise Sales ETL
 
 on:
   workflow_dispatch:
@@ -11,12 +11,12 @@ on:
         description: 'to_date report (YYYY-MM-DD), kosong = hari ini WIB'
         required: false
         default: ''
-      company:
-        description: 'Company'
+      companies:
+        description: 'Daftar company dipisah koma'
         required: true
-        default: 'SKIN+ DEI'
+        default: 'SKIN+ DEI,European Slimming Centre,EUROHAIRLAB,EUROSKINLAB'
       business:
-        description: 'Filter business (mis. SKIN+, SLIM+). Kosong = semua'
+        description: 'Filter business (hanya berlaku untuk SKIN+ DEI). Kosong = semua'
         required: false
         default: ''
       territory:
@@ -30,7 +30,7 @@ on:
       bq_table:
         description: 'Tabel target BigQuery'
         required: true
-        default: 'euromedica-495509.database.fact_transaction_testing'
+        default: 'euromedica-495509.database.item_wise_sales'
 
 env:
   MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
@@ -89,12 +89,12 @@ jobs:
         run: |
           python -c "import os, pymysql; c = pymysql.connect(host=os.environ['MYSQL_HOST'], port=int(os.environ['MYSQL_PORT']), user=os.environ['MYSQL_USER'], password=os.environ['MYSQL_PASSWORD'], database=os.environ['MYSQL_DATABASE'], connect_timeout=15); c.close(); print('MySQL connection OK')"
 
-      - name: Run Fact Transaction ETL
+      - name: Run Item-wise Sales ETL
         run: |
-          python etl_fact_transaction_testing.py \
+          python etl_item_wises_sales.py \
             --start "${{ inputs.start_date }}" \
             --end "${{ inputs.end_date }}" \
-            --company "${{ inputs.company }}" \
+            --companies "${{ inputs.companies }}" \
             --business "${{ inputs.business }}" \
             --territory "${{ inputs.territory }}" \
             --item-group "${{ inputs.item_group }}" \
