@@ -31,6 +31,7 @@ MAPPING_TABLE_ID = f"{PROJECT}.database.dim_so_posting_date"
 MAPPING_MAX_AGE_DAYS = 3
 LATE_BUFFER_MONTHS = 1
 REPORT_TIMEOUT = 300
+TABLE_EXPIRATION = "2099-01-01 00:00:00+00"
 
 
 def login():
@@ -210,6 +211,7 @@ def save_mapping(client, so_posting):
         autodetect=True,
     )
     client.load_table_from_dataframe(df, MAPPING_TABLE_ID, job_config=job_config).result()
+    disable_expiration(client, MAPPING_TABLE_ID)
     print(f"Mapping tersimpan -> {MAPPING_TABLE_ID} ({len(df)} rows)")
 
 
@@ -301,8 +303,8 @@ def load_mapping_auto(session, client, from_posting_date=None, max_age_days=MAPP
     if client is not None:
         try:
             meta = list(client.query(
-                f"SELECT last_modified_time FROM `{PROJECT}.database.__TABLES__` "
-                f"WHERE table_id = 'dim_so_posting_date'"
+                f"SELECT last_modified_time FROM `{PROJECT}.database.INFORMATION_SCHEMA.TABLES` "
+                f"WHERE table_name = 'dim_so_posting_date'"
             ).result())
             if meta:
                 ts = pd.Timestamp(meta[0]["last_modified_time"])
@@ -311,6 +313,10 @@ def load_mapping_auto(session, client, from_posting_date=None, max_age_days=MAPP
                 age_days = (pd.Timestamp.now(tz="UTC") - ts).total_seconds() / 86400
                 if age_days <= max_age_days:
                     print(f"Mapping cache usia {age_days:.1f} hari (<= {max_age_days}) -> pakai BQ")
+                    try:
+                        disable_expiration(client, MAPPING_TABLE_ID)
+                    except Exception as e:
+                        print(f"Gagal set expiration mapping: {e}")
                     return load_mapping_from_bq(client)
                 print(f"Mapping cache usia {age_days:.1f} hari (> {max_age_days}) -> build in-memory")
         except Exception as e:
@@ -475,7 +481,7 @@ def write_parquet(df, file_path):
 
 
 # ──────────────────────────────────────────────
-#  LOAD: per bulan (idempotent, partition transaction_date)
+#  LOAD: per bulan (idempotent, tanpa partisi seperti production)
 # ──────────────────────────────────────────────
 def table_exists(client):
     try:
@@ -483,6 +489,18 @@ def table_exists(client):
         return True
     except NotFound:
         return False
+
+
+def disable_expiration(client, table_id):
+    client.query(
+        f"ALTER TABLE `{table_id}` "
+        f"SET OPTIONS (expiration_timestamp = TIMESTAMP '{TABLE_EXPIRATION}')"
+    ).result()
+    try:
+        exp = getattr(client.get_table(table_id), "expiration_time", None)
+        print(f"  expiration tabel: {exp} -> {table_id}")
+    except Exception as e:
+        print(f"  expiration di-set 2099 -> {table_id} (info: {e})")
 
 
 def delete_month(client, year, month):
@@ -506,23 +524,21 @@ def load_month(client, file_path, year, month):
     exists = table_exists(client)
     if exists:
         delete_month(client, year, month)
-        job_config = bigquery.LoadJobConfig(
-            source_format=bigquery.SourceFormat.PARQUET,
-            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-            autodetect=True,
-        )
-    else:
-        job_config = bigquery.LoadJobConfig(
-            source_format=bigquery.SourceFormat.PARQUET,
-            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-            autodetect=True,
-            time_partitioning=bigquery.TimePartitioning(field="transaction_date"),
-        )
+
+    job_config = bigquery.LoadJobConfig(
+        source_format=bigquery.SourceFormat.PARQUET,
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        autodetect=True,
+    )
 
     with open(file_path, "rb") as f:
         job = client.load_table_from_file(f, TABLE_ID, job_config=job_config)
     job.result()
-    print(f"  loaded {job.output_rows} rows -> partisi {year}-{month:02d}")
+
+    if not exists:
+        disable_expiration(client, TABLE_ID)
+
+    print(f"  loaded {job.output_rows} rows -> bulan {year}-{month:02d}")
 
 
 # ──────────────────────────────────────────────
@@ -565,6 +581,9 @@ def run_range(session, client, start, end, force=False, map_max_age_days=MAPPING
     print(f"\n=== BACKFILL {start[0]}-{start[1]:02d} .. {end[0]}-{end[1]:02d} ===")
 
     mapping_df = load_mapping_auto(session, client, from_posting_date=None, max_age_days=map_max_age_days)
+
+    if client is not None and table_exists(client):
+        disable_expiration(client, TABLE_ID)
 
     today = datetime.now(timezone.utc).replace(tzinfo=None)
     month_start_today = datetime(today.year, today.month, 1)
@@ -676,6 +695,8 @@ if __name__ == "__main__":
                 from_posting_date=f"{year}-{month:02d}-01",
                 max_age_days=args.map_max_age_days,
             )
+            if client is not None and table_exists(client):
+                disable_expiration(client, TABLE_ID)
             run_month(session, client, mapping_df, year, month)
         else:
             if args.all_months:
