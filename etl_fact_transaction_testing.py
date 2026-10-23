@@ -1,716 +1,511 @@
-import os
-import sys
-import json
-import time
 import argparse
-import requests
+import os
+import time
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from datetime import datetime, timezone, timedelta
-from dateutil.relativedelta import relativedelta
+import pymysql
 from google.cloud import bigquery
-from google.api_core.exceptions import NotFound
 
-# --- KONFIGURASI API ---
-BASE_URL = "https://erpeuromedicagroup.com"
-LOGIN_URL = f"{BASE_URL}/api/method/login"
-REPORT_URL = f"{BASE_URL}/api/method/frappe.desk.query_report.run"
-REPORTVIEW_URL = f"{BASE_URL}/api/method/frappe.desk.reportview.get"
-USERNAME = "rizka.dei@skinplusclinic.com"
-PASSWORD = "090900"
-REPORT_NAME = "Item-wise Sales History"
-COMPANY = "SKIN+ DEI"
+MYSQL_HOST = os.getenv("MYSQL_HOST", "100.87.194.79")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "")
 
-# --- KONFIGURASI ETL ---
-PAGE_SIZE = 5000
-START_YEAR = 2022
-PROJECT = "euromedica-495509"
-TABLE_ID = f"{PROJECT}.database.fact_transaction_testing"
-MAPPING_TABLE_ID = f"{PROJECT}.database.dim_so_posting_date"
-MAPPING_MAX_AGE_DAYS = 3
-LATE_BUFFER_MONTHS = 1
-REPORT_TIMEOUT = 300
+COMPANY = os.getenv("ERP_COMPANY", "SKIN+ DEI")
+SOURCE_TIMEZONE = ZoneInfo("Asia/Jakarta")
+BATCH_SIZE = int(os.getenv("EXTRACT_BATCH_SIZE", "5000"))
+
+DEFAULT_TABLE_ID = "euromedica-495509.database.fact_transaction_testing"
 TABLE_EXPIRATION = "2099-01-01 00:00:00+00"
 
-
-def login():
-    session = requests.Session()
-    session.post(LOGIN_URL, data={"usr": USERNAME, "pwd": PASSWORD}).raise_for_status()
-    print("Login berhasil")
-    return session
-
-
-def month_bounds(year, month):
-    start = datetime(year, month, 1)
-    end = start + relativedelta(months=1) - timedelta(days=1)
-    return start, end
-
-
-def parse_month(value):
-    try:
-        year, month = value.split("-")
-        year, month = int(year), int(month)
-        if not 1 <= month <= 12:
-            raise ValueError
-    except Exception:
-        raise SystemExit(f"Format bulan salah: '{value}' (contoh: 2026-09)")
-    return year, month
-
-
-# ──────────────────────────────────────────────
-#  EXTRACT: Sales History (report, per bulan)
-# ──────────────────────────────────────────────
-def extract_sales_history_window(session, from_date, to_date, retries=3):
-    payload = {
-        "report_name": REPORT_NAME,
-        "filters": json.dumps({
-            "company": COMPANY,
-            "from_date": from_date,
-            "to_date": to_date,
-        }),
-        "ignore_prepared_report": 1,
-    }
-
-    last_error = None
-    for attempt in range(1, retries + 1):
-        t0 = time.time()
-        try:
-            r = session.post(REPORT_URL, json=payload, timeout=REPORT_TIMEOUT)
-            r.raise_for_status()
-            result = r.json().get("message", {}).get("result", [])
-
-            if not result or len(result) <= 1:
-                print(f"  {from_date}..{to_date}: 0 rows ({time.time()-t0:.1f}s)")
-                return pd.DataFrame()
-
-            df = pd.DataFrame(result[:-1])
-            print(f"  {from_date}..{to_date}: {len(df)} rows ({time.time()-t0:.1f}s)")
-            return df
-        except Exception as e:
-            last_error = e
-            print(f"  report gagal (attempt {attempt}/{retries}): {e}")
-            if attempt < retries:
-                time.sleep(5 * attempt)
-
-    raise RuntimeError(f"Gagal ambil report {from_date}..{to_date}: {last_error}")
-
-
-def extract_sales_history_month(session, year, month):
-    from_date, month_end = month_bounds(year, month)
-
-    today = datetime.now(timezone.utc).replace(tzinfo=None)
-    if from_date > today:
-        return pd.DataFrame()
-
-    to_date = min(today, month_end + relativedelta(months=LATE_BUFFER_MONTHS))
-    df = extract_sales_history_window(
-        session,
-        from_date.strftime("%Y-%m-%d"),
-        to_date.strftime("%Y-%m-%d"),
-    )
-
-    if df.empty:
-        return df
-
-    if "transaction_date" in df.columns:
-        td = pd.to_datetime(df["transaction_date"], errors="coerce")
-        mask = (td >= pd.Timestamp(from_date)) & (td <= pd.Timestamp(month_end))
-        outside = int((~mask).sum())
-        df = df[mask].reset_index(drop=True)
-        if outside:
-            print(f"  filter transaction_date {from_date:%Y-%m-%d}..{month_end:%Y-%m-%d}: buang {outside} baris di luar bulan")
-
-    return df
-
-
-# ──────────────────────────────────────────────
-#  EXTRACT: Doctype (reportview paging)
-# ──────────────────────────────────────────────
-def extract_doctype(session, doctype, fields, filters=None, label=None):
-    label = label or doctype
-    all_rows = []
-    start = 0
-    page = 0
-
-    while True:
-        params = {
-            "doctype": doctype,
-            "fields": json.dumps(fields),
-            "limit_start": str(start),
-            "limit_page_length": str(PAGE_SIZE),
-        }
-        if filters:
-            params["filters"] = json.dumps(filters)
-
-        try:
-            r = session.get(REPORTVIEW_URL, params=params, timeout=60)
-            r.raise_for_status()
-            msg = r.json().get("message", {})
-            keys = msg.get("keys", [])
-            values = msg.get("values", [])
-
-            if not values:
-                break
-
-            all_rows.append(pd.DataFrame(values, columns=keys))
-            start += PAGE_SIZE
-            page += 1
-
-            if page % 20 == 0 or len(values) < PAGE_SIZE:
-                print(f"  {label}: {start} rows...")
-
-            if len(values) < PAGE_SIZE:
-                break
-
-            time.sleep(0.1)
-        except Exception as e:
-            print(f"  {label}: ERROR at offset {start}: {e}")
-            time.sleep(2)
-            try:
-                r = session.get(REPORTVIEW_URL, params=params, timeout=60)
-                r.raise_for_status()
-                msg = r.json().get("message", {})
-                values = msg.get("values", [])
-                if not values:
-                    break
-                all_rows.append(pd.DataFrame(values, columns=msg.get("keys", [])))
-                start += PAGE_SIZE
-                page += 1
-                if len(values) < PAGE_SIZE:
-                    break
-            except Exception as e2:
-                print(f"  {label}: RETRY FAILED: {e2}")
-                break
-
-    if all_rows:
-        df = pd.concat(all_rows, ignore_index=True)
-        print(f"  {label}: TOTAL {len(df)} rows")
-        return df
-    return pd.DataFrame()
-
-
-# ──────────────────────────────────────────────
-#  MODE 1: Build mapping -> BQ
-# ──────────────────────────────────────────────
-def save_mapping(client, so_posting):
-    if so_posting.empty:
-        print("Mapping kosong, tidak disimpan.")
-        return
-
-    df = so_posting[["sales_order", "posting_date"]].copy()
-    df["posting_date"] = pd.to_datetime(df["posting_date"])
-
-    try:
-        client.delete_table(MAPPING_TABLE_ID, not_found_ok=True)
-    except Exception:
-        pass
-
-    job_config = bigquery.LoadJobConfig(
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-        autodetect=True,
-    )
-    client.load_table_from_dataframe(df, MAPPING_TABLE_ID, job_config=job_config).result()
-    disable_expiration(client, MAPPING_TABLE_ID)
-    print(f"Mapping tersimpan -> {MAPPING_TABLE_ID} ({len(df)} rows)")
-
-
-def build_mapping(session, client):
-    print("\n=== [MODE] Build sales_order -> posting_date mapping ===")
-
-    print("\nExtracting Payment Entry...")
-    pe_df = extract_doctype(session, "Payment Entry",
-        ["name", "posting_date", "paid_amount", "party_name", "mode_of_payment", "status", "company"],
-        label="PE")
-
-    print("\nExtracting Payment Entry Reference...")
-    pe_ref_df = extract_doctype(session, "Payment Entry Reference",
-        ["parent", "reference_doctype", "reference_name"],
-        label="PE Ref")
-
-    print("\nExtracting Sales Invoice Item (sales_order)...")
-    si_item_df = extract_doctype(session, "Sales Invoice Item",
-        ["parent", "sales_order"],
-        filters=[["sales_order", "is", "set"]],
-        label="SI Item")
-
-    print("\nBuilding mapping...")
-
-    pe_ref_so = pe_ref_df[pe_ref_df["reference_doctype"] == "Sales Order"][
-        ["parent", "reference_name"]
-    ].copy()
-    pe_ref_so.columns = ["pe_name", "sales_order"]
-
-    pe_ref_si = pe_ref_df[pe_ref_df["reference_doctype"] == "Sales Invoice"][
-        ["parent", "reference_name"]
-    ].copy()
-    pe_ref_si.columns = ["pe_name", "si_name"]
-
-    si_to_so = si_item_df[
-        si_item_df["sales_order"].notna() & (si_item_df["sales_order"].astype(str).str.strip() != "")
-    ][["parent", "sales_order"]].copy()
-    si_to_so.columns = ["si_name", "sales_order"]
-    si_to_so = si_to_so.drop_duplicates()
-    print(f"  SI -> SO: {len(si_to_so)} unique SI")
-
-    pe_ref_si_so = pe_ref_si.merge(si_to_so, on="si_name", how="inner")
-    print(f"  PE Ref (SI -> SO): {len(pe_ref_si_so)} rows")
-
-    so_pe = pd.concat([
-        pe_ref_so[["pe_name", "sales_order"]],
-        pe_ref_si_so[["pe_name", "sales_order"]],
-    ], ignore_index=True)
-
-    so_pe_posting = so_pe.merge(
-        pe_df[["name", "posting_date"]],
-        left_on="pe_name", right_on="name", how="inner",
-    )
-    print(f"  Joined with PE: {len(so_pe_posting)} rows")
-
-    so_posting = (
-        so_pe_posting
-        .groupby("sales_order")["posting_date"]
-        .min()
-        .reset_index()
-    )
-    so_posting.columns = ["sales_order", "posting_date"]
-    print(f"  Unique SO with posting_date: {len(so_posting)}")
-
-    so_posting["posting_date"] = pd.to_datetime(so_posting["posting_date"])
-
-    save_mapping(client, so_posting)
-
-
-# ──────────────────────────────────────────────
-#  MODE 2: Load mapping dari BQ
-# ──────────────────────────────────────────────
-def load_mapping_from_bq(client):
-    rows = list(client.query(
-        f"SELECT sales_order, posting_date FROM `{MAPPING_TABLE_ID}`"
-    ).result())
-    df = pd.DataFrame(
-        [(r["sales_order"], r["posting_date"]) for r in rows],
-        columns=["sales_order", "posting_date"],
-    )
-    print(f"Mapping dimuat dari BQ: {len(df)} rows")
-    return df
-
-
-# ──────────────────────────────────────────────
-#  Mapping otomatis: cache BQ (bila segar) -> else in-memory
-# ──────────────────────────────────────────────
-def load_mapping_auto(session, client, from_posting_date=None, max_age_days=MAPPING_MAX_AGE_DAYS):
-    if client is not None:
-        try:
-            meta = list(client.query(
-                f"SELECT last_modified_time FROM `{PROJECT}.database.INFORMATION_SCHEMA.TABLES` "
-                f"WHERE table_name = 'dim_so_posting_date'"
-            ).result())
-            if meta:
-                ts = pd.Timestamp(meta[0]["last_modified_time"])
-                if ts.tzinfo is None:
-                    ts = ts.tz_localize("UTC")
-                age_days = (pd.Timestamp.now(tz="UTC") - ts).total_seconds() / 86400
-                if age_days <= max_age_days:
-                    print(f"Mapping cache usia {age_days:.1f} hari (<= {max_age_days}) -> pakai BQ")
-                    try:
-                        disable_expiration(client, MAPPING_TABLE_ID)
-                    except Exception as e:
-                        print(f"Gagal set expiration mapping: {e}")
-                    return load_mapping_from_bq(client)
-                print(f"Mapping cache usia {age_days:.1f} hari (> {max_age_days}) -> build in-memory")
-        except Exception as e:
-            print(f"Mapping cache tidak terbaca ({e}) -> build in-memory")
-
-    mapping_df = build_mapping_inmemory(session, from_posting_date=from_posting_date)
-
-    if client is not None and from_posting_date is None and not mapping_df.empty:
-        try:
-            save_mapping(client, mapping_df)
-        except Exception as e:
-            print(f"Gagal simpan mapping ke BQ: {e}")
-
-    return mapping_df
-
-
-# ──────────────────────────────────────────────
-#  Build mapping in-memory (untuk testing, tanpa BQ)
-# ──────────────────────────────────────────────
-def build_mapping_inmemory(session, from_posting_date=None):
-    print("\n=== Build mapping in-memory ===")
-
-    filters = None
-    if from_posting_date:
-        filters = [["posting_date", ">=", from_posting_date]]
-
-    print("\nExtracting Payment Entry...")
-    pe_df = extract_doctype(session, "Payment Entry",
-        ["name", "posting_date"],
-        filters=filters,
-        label="PE")
-
-    if pe_df.empty:
-        return pd.DataFrame(columns=["sales_order", "posting_date"])
-
-    print("\nExtracting Payment Entry Reference...")
-    pe_ref_df = extract_doctype(session, "Payment Entry Reference",
-        ["parent", "reference_doctype", "reference_name"],
-        label="PE Ref")
-
-    print("\nExtracting Sales Invoice Item (sales_order)...")
-    si_item_df = extract_doctype(session, "Sales Invoice Item",
-        ["parent", "sales_order"],
-        filters=[["sales_order", "is", "set"]],
-        label="SI Item")
-
-    print("\nBuilding mapping...")
-
-    pe_ref_so = pe_ref_df[pe_ref_df["reference_doctype"] == "Sales Order"][
-        ["parent", "reference_name"]
-    ].copy()
-    pe_ref_so.columns = ["pe_name", "sales_order"]
-
-    pe_ref_si = pe_ref_df[pe_ref_df["reference_doctype"] == "Sales Invoice"][
-        ["parent", "reference_name"]
-    ].copy()
-    pe_ref_si.columns = ["pe_name", "si_name"]
-
-    si_to_so = si_item_df[
-        si_item_df["sales_order"].notna() & (si_item_df["sales_order"].astype(str).str.strip() != "")
-    ][["parent", "sales_order"]].copy()
-    si_to_so.columns = ["si_name", "sales_order"]
-    si_to_so = si_to_so.drop_duplicates()
-    print(f"  SI -> SO: {len(si_to_so)} unique SI")
-
-    pe_ref_si_so = pe_ref_si.merge(si_to_so, on="si_name", how="inner")
-    print(f"  PE Ref (SI -> SO): {len(pe_ref_si_so)} rows")
-
-    so_pe = pd.concat([
-        pe_ref_so[["pe_name", "sales_order"]],
-        pe_ref_si_so[["pe_name", "sales_order"]],
-    ], ignore_index=True)
-
-    so_pe_posting = so_pe.merge(
-        pe_df[["name", "posting_date"]],
-        left_on="pe_name", right_on="name", how="inner",
-    )
-    print(f"  Joined with PE: {len(so_pe_posting)} rows")
-
-    so_posting = (
-        so_pe_posting
-        .groupby("sales_order")["posting_date"]
-        .min()
-        .reset_index()
-    )
-    so_posting.columns = ["sales_order", "posting_date"]
-    print(f"  Unique SO with posting_date: {len(so_posting)}")
-
-    return so_posting
-
-
-# ──────────────────────────────────────────────
-#  TRANSFORM: merge mapping + normalisasi tipe
-# ──────────────────────────────────────────────
-DATE_COLS = {"transaction_date", "posting_date"}
-NUMERIC_COLS = {
+DATE_COLUMNS = ["transaction_date", "posting_date"]
+NUMERIC_COLUMNS = [
     "quantity", "net_rate", "net_amount", "price_list_rate",
-    "dpp_retail", "ppn_retail", "collection", "billed_amount",
-    "delivered_quantity",
-}
+    "delivered_quantity", "billed_amount", "dpp_retail", "ppn_retail", "collection",
+]
+
+COLUMNS = [
+    "transaction_date", "sales_order", "item_code", "item_name", "item_group",
+    "description", "quantity", "uom", "net_rate", "net_amount",
+    "customer", "customer_name", "customer_group", "customer_number", "client_type",
+    "sales_consultant", "employee_name", "doctor_name", "price_list", "pricing_rule",
+    "order_type", "price_list_rate", "territory", "project",
+    "delivered_quantity", "billed_amount", "company", "dpp_retail", "ppn_retail",
+    "collection", "treatment_voucher", "event_name", "posting_date", "_extracted_at",
+]
+
+ARROW_SCHEMA = pa.schema([
+    pa.field("transaction_date", pa.date32()),
+    pa.field("sales_order", pa.string()),
+    pa.field("item_code", pa.string()),
+    pa.field("item_name", pa.string()),
+    pa.field("item_group", pa.string()),
+    pa.field("description", pa.string()),
+    pa.field("quantity", pa.float64()),
+    pa.field("uom", pa.string()),
+    pa.field("net_rate", pa.float64()),
+    pa.field("net_amount", pa.float64()),
+    pa.field("customer", pa.string()),
+    pa.field("customer_name", pa.string()),
+    pa.field("customer_group", pa.string()),
+    pa.field("customer_number", pa.string()),
+    pa.field("client_type", pa.string()),
+    pa.field("sales_consultant", pa.string()),
+    pa.field("employee_name", pa.string()),
+    pa.field("doctor_name", pa.string()),
+    pa.field("price_list", pa.string()),
+    pa.field("pricing_rule", pa.string()),
+    pa.field("order_type", pa.string()),
+    pa.field("price_list_rate", pa.float64()),
+    pa.field("territory", pa.string()),
+    pa.field("project", pa.string()),
+    pa.field("delivered_quantity", pa.float64()),
+    pa.field("billed_amount", pa.float64()),
+    pa.field("company", pa.string()),
+    pa.field("dpp_retail", pa.float64()),
+    pa.field("ppn_retail", pa.float64()),
+    pa.field("collection", pa.float64()),
+    pa.field("treatment_voucher", pa.string()),
+    pa.field("event_name", pa.string()),
+    pa.field("posting_date", pa.date32()),
+    pa.field("_extracted_at", pa.timestamp("us", tz="UTC")),
+])
+
+BQ_SCHEMA = [
+    bigquery.SchemaField("transaction_date", "DATE"),
+    bigquery.SchemaField("sales_order", "STRING"),
+    bigquery.SchemaField("item_code", "STRING"),
+    bigquery.SchemaField("item_name", "STRING"),
+    bigquery.SchemaField("item_group", "STRING"),
+    bigquery.SchemaField("description", "STRING"),
+    bigquery.SchemaField("quantity", "FLOAT"),
+    bigquery.SchemaField("uom", "STRING"),
+    bigquery.SchemaField("net_rate", "FLOAT"),
+    bigquery.SchemaField("net_amount", "FLOAT"),
+    bigquery.SchemaField("customer", "STRING"),
+    bigquery.SchemaField("customer_name", "STRING"),
+    bigquery.SchemaField("customer_group", "STRING"),
+    bigquery.SchemaField("customer_number", "STRING"),
+    bigquery.SchemaField("client_type", "STRING"),
+    bigquery.SchemaField("sales_consultant", "STRING"),
+    bigquery.SchemaField("employee_name", "STRING"),
+    bigquery.SchemaField("doctor_name", "STRING"),
+    bigquery.SchemaField("price_list", "STRING"),
+    bigquery.SchemaField("pricing_rule", "STRING"),
+    bigquery.SchemaField("order_type", "STRING"),
+    bigquery.SchemaField("price_list_rate", "FLOAT"),
+    bigquery.SchemaField("territory", "STRING"),
+    bigquery.SchemaField("project", "STRING"),
+    bigquery.SchemaField("delivered_quantity", "FLOAT"),
+    bigquery.SchemaField("billed_amount", "FLOAT"),
+    bigquery.SchemaField("company", "STRING"),
+    bigquery.SchemaField("dpp_retail", "FLOAT"),
+    bigquery.SchemaField("ppn_retail", "FLOAT"),
+    bigquery.SchemaField("collection", "FLOAT"),
+    bigquery.SchemaField("treatment_voucher", "STRING"),
+    bigquery.SchemaField("event_name", "STRING"),
+    bigquery.SchemaField("posting_date", "DATE"),
+    bigquery.SchemaField("_extracted_at", "TIMESTAMP"),
+]
+
+QUERY = """
+WITH so AS (
+  SELECT so.name, so.transaction_date, so.customer, so.customer_name, so.customer_group,
+         so.territory, so.doctor_name, so.order_type, so.selling_price_list,
+         so.client_type, so.company, so.project
+  FROM `tabSales Order` so
+  WHERE so.docstatus = 1 AND so.company = %s
+    AND so.transaction_date >= %s AND so.transaction_date < %s
+),
+soi AS (
+  SELECT soi.name AS so_item, soi.parent AS sales_order, soi.item_code, soi.item_name,
+         soi.item_group, soi.description, soi.qty, soi.uom, soi.net_rate, soi.net_amount,
+         soi.price_list_rate, soi.delivered_qty, soi.billed_amt, soi.treatment_voucher,
+         soi.pricing_rules
+  FROM `tabSales Order Item` soi
+  JOIN so ON so.name = soi.parent
+),
+cust AS (
+  SELECT name, customer_number FROM `tabCustomer`
+  WHERE name IN (SELECT DISTINCT customer FROM so)
+),
+team AS (
+  SELECT parent, sales_person, employee_name FROM (
+    SELECT st.parent, st.sales_person, sp.employee_name,
+           ROW_NUMBER() OVER (PARTITION BY st.parent ORDER BY st.idx) AS rn
+    FROM `tabSales Team` st
+    LEFT JOIN `tabSales Person` sp ON sp.name = st.sales_person
+    WHERE st.parenttype = 'Sales Order'
+      AND st.parent IN (SELECT name FROM so)
+  ) x WHERE rn = 1
+),
+adv AS (
+  SELECT per.reference_name AS sales_order, SUM(per.allocated_amount) AS advance
+  FROM `tabPayment Entry Reference` per
+  JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
+  JOIN so ON so.name = per.reference_name
+  WHERE per.reference_doctype = 'Sales Order'
+    AND pe.mode_of_payment NOT LIKE 'Convert%%'
+  GROUP BY per.reference_name
+),
+si_links AS (
+  SELECT sii.parent AS si, sii.sales_order, sii.so_detail AS so_item, sii.net_amount
+  FROM `tabSales Invoice Item` sii
+  JOIN so ON so.name = sii.sales_order
+  WHERE sii.so_detail IS NOT NULL AND sii.so_detail <> ''
+),
+si_totals AS (
+  SELECT sii.parent AS si, SUM(sii.net_amount) AS si_net
+  FROM `tabSales Invoice Item` sii
+  WHERE sii.parent IN (SELECT DISTINCT si FROM si_links)
+  GROUP BY sii.parent
+),
+si_alloc AS (
+  SELECT per.reference_name AS si, SUM(per.allocated_amount) AS alloc
+  FROM `tabPayment Entry Reference` per
+  JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
+  WHERE per.reference_doctype = 'Sales Invoice'
+    AND per.reference_name IN (SELECT DISTINCT si FROM si_links)
+    AND pe.mode_of_payment NOT LIKE 'Convert%%'
+  GROUP BY per.reference_name
+),
+inv AS (
+  SELECT l.sales_order, l.so_item,
+         SUM(l.net_amount * a.alloc / NULLIF(t.si_net, 0)) AS inv_collected
+  FROM si_links l
+  JOIN si_alloc a ON a.si = l.si
+  JOIN si_totals t ON t.si = l.si
+  GROUP BY l.sales_order, l.so_item
+),
+pd_map AS (
+  SELECT x.sales_order, MIN(x.posting_date) AS posting_date FROM (
+    SELECT sii.sales_order, pe.posting_date
+    FROM `tabPayment Entry Reference` per
+    JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
+    JOIN `tabSales Invoice Item` sii ON sii.parent = per.reference_name
+    JOIN so ON so.name = sii.sales_order
+    WHERE per.reference_doctype = 'Sales Invoice'
+      AND sii.so_detail IS NOT NULL AND sii.so_detail <> ''
+    UNION ALL
+    SELECT per.reference_name AS sales_order, pe.posting_date
+    FROM `tabPayment Entry Reference` per
+    JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
+    JOIN so ON so.name = per.reference_name
+    WHERE per.reference_doctype = 'Sales Order'
+  ) x
+  GROUP BY x.sales_order
+),
+tv_voucher AS (
+  SELECT itv.parent, itv.treatment_voucher, MAX(itv.event_name) AS event_name
+  FROM `tabInvoice Treatment Voucher` itv
+  WHERE itv.parent IN (SELECT name FROM so)
+    AND itv.treatment_voucher IS NOT NULL AND itv.treatment_voucher <> ''
+  GROUP BY itv.parent, itv.treatment_voucher
+),
+tv_item AS (
+  SELECT itv.parent, itv.item_name, MAX(itv.event_name) AS event_name
+  FROM `tabInvoice Treatment Voucher` itv
+  WHERE itv.parent IN (SELECT name FROM so)
+    AND itv.item_name IS NOT NULL AND itv.item_name <> ''
+  GROUP BY itv.parent, itv.item_name
+),
+base AS (
+  SELECT soi.*, so.transaction_date, so.customer, so.customer_name, so.customer_group,
+         so.territory, so.doctor_name, so.order_type, so.selling_price_list,
+         so.client_type, so.company, so.project,
+         COALESCE(inv.inv_collected, 0) AS inv_collected,
+         COALESCE(adv.advance, 0) AS advance
+  FROM soi
+  JOIN so ON so.name = soi.sales_order
+  LEFT JOIN inv ON inv.so_item = soi.so_item
+  LEFT JOIN adv ON adv.sales_order = soi.sales_order
+),
+calc AS (
+  SELECT b.*,
+         GREATEST(b.net_amount - b.inv_collected, 0) AS remaining,
+         SUM(GREATEST(b.net_amount - b.inv_collected, 0))
+           OVER (PARTITION BY b.sales_order) AS total_remaining,
+         SUM(b.net_amount) OVER (PARTITION BY b.sales_order) AS total_net
+  FROM base b
+),
+fin AS (
+  SELECT c.*,
+         c.inv_collected
+         + CASE WHEN c.total_remaining > 0
+                THEN c.advance * c.remaining / c.total_remaining
+                ELSE 0 END
+         + CASE WHEN c.total_remaining < c.advance AND c.total_net > 0
+                THEN (c.advance - c.total_remaining) * c.net_amount / c.total_net
+                ELSE 0 END AS collection
+  FROM calc c
+),
+si_doc AS (
+  SELECT sii.sales_order AS sales_order
+  FROM `tabSales Invoice Item` sii
+  WHERE sii.sales_order IN (SELECT name FROM so)
+  UNION
+  SELECT soi2.parent AS sales_order
+  FROM `tabSales Invoice Item` sii
+  JOIN `tabSales Order Item` soi2 ON soi2.name = sii.so_detail
+  WHERE soi2.parent IN (SELECT name FROM so)
+),
+dn_doc AS (
+  SELECT dni.against_sales_order AS sales_order
+  FROM `tabDelivery Note Item` dni
+  WHERE dni.against_sales_order IN (SELECT name FROM so)
+  UNION
+  SELECT soi3.parent AS sales_order
+  FROM `tabDelivery Note Item` dni
+  JOIN `tabSales Order Item` soi3 ON soi3.name = dni.so_detail
+  WHERE soi3.parent IN (SELECT name FROM so)
+),
+pay_doc AS (
+  SELECT per.reference_name AS sales_order
+  FROM `tabPayment Entry Reference` per
+  JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
+  WHERE per.reference_name IN (SELECT name FROM so)
+  UNION
+  SELECT soi4.parent AS sales_order
+  FROM `tabPayment Entry Reference` per
+  JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
+  JOIN `tabSales Invoice Item` sii ON sii.parent = per.reference_name
+  JOIN `tabSales Order Item` soi4 ON soi4.name = sii.so_detail
+  WHERE soi4.parent IN (SELECT name FROM so)
+),
+item_act AS (
+  SELECT f.sales_order,
+         MAX(CASE WHEN f.delivered_qty > 0 OR f.billed_amt > 0 OR f.collection > 0
+                  THEN 1 ELSE 0 END) AS has_act
+  FROM fin f
+  GROUP BY f.sales_order
+)
+SELECT
+  f.transaction_date,
+  f.sales_order,
+  f.item_code,
+  f.item_name,
+  f.item_group,
+  f.description,
+  f.qty                     AS quantity,
+  f.uom,
+  f.net_rate,
+  f.net_amount,
+  f.customer,
+  f.customer_name,
+  f.customer_group,
+  c.customer_number,
+  f.client_type,
+  t.sales_person            AS sales_consultant,
+  t.employee_name,
+  f.doctor_name,
+  f.selling_price_list      AS price_list,
+  COALESCE(
+    CASE WHEN JSON_VALID(f.pricing_rules)
+         THEN JSON_UNQUOTE(JSON_EXTRACT(f.pricing_rules, '$[0]'))
+         ELSE '' END, '')    AS pricing_rule,
+  f.order_type,
+  f.price_list_rate,
+  f.territory,
+  f.project,
+  f.delivered_qty           AS delivered_quantity,
+  f.billed_amt              AS billed_amount,
+  f.company,
+  0.0                       AS dpp_retail,
+  0.0                       AS ppn_retail,
+  f.collection,
+  f.treatment_voucher,
+  COALESCE(tvv.event_name, tvi.event_name) AS event_name,
+  pdm.posting_date
+FROM fin f
+JOIN item_act ia ON ia.sales_order = f.sales_order
+LEFT JOIN si_doc sd ON sd.sales_order = f.sales_order
+LEFT JOIN dn_doc dd ON dd.sales_order = f.sales_order
+LEFT JOIN pay_doc pdx ON pdx.sales_order = f.sales_order
+LEFT JOIN cust c ON c.name = f.customer
+LEFT JOIN team t ON t.parent = f.sales_order
+LEFT JOIN pd_map pdm ON pdm.sales_order = f.sales_order
+LEFT JOIN tv_voucher tvv
+  ON tvv.parent = f.sales_order AND tvv.treatment_voucher = f.treatment_voucher
+LEFT JOIN tv_item tvi
+  ON tvi.parent = f.sales_order AND tvi.item_name = f.item_code
+WHERE ia.has_act = 1
+   OR f.net_amount = 0
+   OR sd.sales_order IS NOT NULL
+   OR dd.sales_order IS NOT NULL
+   OR pdx.sales_order IS NOT NULL
+"""
 
 
-def _to_string(value):
-    if value is None:
-        return None
-    try:
-        if pd.isna(value):
-            return None
-    except (TypeError, ValueError):
-        pass
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, str):
-        return value
-    return str(value)
+def parse_args():
+    parser = argparse.ArgumentParser(description="ETL fact_transaction dari MariaDB ERP")
+    parser.add_argument("--start", default=os.getenv("START_DATE", "2022-01-01"),
+                        help="Tanggal awal (YYYY-MM-DD), default 2022-01-01")
+    parser.add_argument("--end", default=os.getenv("END_DATE"),
+                        help="Tanggal akhir eksklusif (YYYY-MM-DD), default besok (WIB)")
+    parser.add_argument("--table", default=os.getenv("BQ_TABLE", DEFAULT_TABLE_ID),
+                        help="Tabel target BigQuery")
+    parser.add_argument("--staging", default=os.getenv("BQ_STAGING_TABLE"),
+                        help="Tabel staging BigQuery (default: <table>_staging)")
+    parser.add_argument("--no-load", action="store_true",
+                        help="Hanya ekstrak ke parquet, tanpa load ke BigQuery")
+    parser.add_argument("--keep-parquet", action="store_true",
+                        help="Jangan hapus file parquet setelah load")
+    return parser.parse_args()
 
 
-def normalize_types(df):
-    for col in df.columns:
-        if col in DATE_COLS:
-            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
-        elif col in NUMERIC_COLS:
-            df[col] = pd.to_numeric(df[col], errors="coerce").astype("float64")
-        elif col == "_extracted_at":
-            df[col] = pd.to_datetime(df[col], errors="coerce")
-        else:
-            df[col] = df[col].map(_to_string).astype("string")
+def normalize_batch(df, extracted_at):
+    for column in DATE_COLUMNS:
+        df[column] = pd.to_datetime(df[column], errors="coerce").dt.date
+
+    for column in NUMERIC_COLUMNS:
+        df[column] = pd.to_numeric(df[column], errors="coerce").astype("float64")
+
+    for column in df.columns:
+        if column in DATE_COLUMNS or column in NUMERIC_COLUMNS:
+            continue
+        if column == "_extracted_at":
+            continue
+        df[column] = df[column].map(
+            lambda value: None if value is None or pd.isna(value) else str(value)
+        )
+
+    df["_extracted_at"] = pd.Timestamp(extracted_at)
     return df
 
 
-def prepare_df(sales_df, mapping_df):
-    result_df = sales_df.merge(mapping_df, on="sales_order", how="left")
+def extract_to_parquet(args):
+    end_date = args.end
+    if not end_date:
+        end_date = (datetime.now(SOURCE_TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    if "posting_date" in result_df.columns:
-        matched = result_df["posting_date"].notna().sum()
-        print(f"  matched posting_date: {matched}/{len(result_df)} ({matched/len(result_df)*100:.1f}%)")
+    extracted_at = datetime.now(timezone.utc).replace(tzinfo=timezone.utc)
+    execution_date = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    file_path = f"fact_transaction_db_{execution_date}.parquet"
 
-    result_df["_extracted_at"] = datetime.now()
+    connection = pymysql.connect(
+        host=MYSQL_HOST,
+        port=MYSQL_PORT,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database=MYSQL_DATABASE,
+        connect_timeout=15,
+        read_timeout=3600,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.SSCursor,
+    )
 
-    return normalize_types(result_df)
+    writer = pq.ParquetWriter(file_path, ARROW_SCHEMA, compression="snappy")
+    total_rows = 0
+    batch_count = 0
+    total_net = 0.0
+    total_billed = 0.0
+    total_collection = 0.0
 
-
-def write_parquet(df, file_path):
-    arrays = []
-    for col in df.columns:
-        series = df[col]
-        if col in DATE_COLS:
-            values = [None if pd.isna(v) else v for v in series]
-            arrays.append(pa.array(values, type=pa.date32()))
-        elif col in NUMERIC_COLS:
-            arrays.append(pa.array(pd.to_numeric(series, errors="coerce"), type=pa.float64()))
-        elif col == "_extracted_at":
-            arrays.append(pa.array(pd.to_datetime(series, errors="coerce"), type=pa.timestamp("us")))
-        else:
-            values = [None if pd.isna(v) else str(v) for v in series]
-            arrays.append(pa.array(values, type=pa.string()))
-
-    table = pa.Table.from_arrays(arrays, names=list(df.columns))
-    pq.write_table(table, file_path)
-
-
-# ──────────────────────────────────────────────
-#  LOAD: per bulan (idempotent, tanpa partisi seperti production)
-# ──────────────────────────────────────────────
-def table_exists(client):
     try:
-        client.get_table(TABLE_ID)
-        return True
-    except NotFound:
-        return False
+        print(f"Menarik fact_transaction dari {MYSQL_DATABASE} periode {args.start} s/d {end_date}")
+        with connection.cursor() as cursor:
+            cursor.execute(QUERY, (COMPANY, args.start, end_date))
+            column_names = [description[0] for description in cursor.description]
+            print(f"Kolom hasil query: {len(column_names)}")
+
+            while True:
+                rows = cursor.fetchmany(BATCH_SIZE)
+                if not rows:
+                    break
+
+                df = pd.DataFrame(rows, columns=column_names)
+                df = normalize_batch(df, extracted_at)
+
+                table = pa.Table.from_pandas(df, schema=ARROW_SCHEMA, preserve_index=False)
+                writer.write_table(table)
+
+                total_rows += len(df)
+                total_net += float(df["net_amount"].sum())
+                total_billed += float(df["billed_amount"].sum())
+                total_collection += float(df["collection"].sum())
+                batch_count += 1
+                if batch_count % 10 == 0:
+                    print(f"Extracted {total_rows} rows")
+    finally:
+        connection.close()
+        writer.close()
+
+    if total_rows == 0:
+        raise ValueError("Tidak ada data fact_transaction pada rentang tanggal tersebut")
+
+    print(f"Parquet saved: {file_path} ({total_rows} rows)")
+    print(f"Summary: net={total_net:,.2f} billed={total_billed:,.2f} collection={total_collection:,.2f}")
+    return file_path, total_rows
 
 
-def disable_expiration(client, table_id):
-    client.query(
-        f"ALTER TABLE `{table_id}` "
-        f"SET OPTIONS (expiration_timestamp = TIMESTAMP '{TABLE_EXPIRATION}')"
-    ).result()
-    try:
-        exp = getattr(client.get_table(table_id), "expiration_time", None)
-        print(f"  expiration tabel: {exp} -> {table_id}")
-    except Exception as e:
-        print(f"  expiration di-set 2099 -> {table_id} (info: {e})")
-
-
-def delete_month(client, year, month):
-    start, end = month_bounds(year, month)
-    client.query(
-        f"DELETE FROM `{TABLE_ID}` "
-        f"WHERE transaction_date BETWEEN DATE '{start:%Y-%m-%d}' AND DATE '{end:%Y-%m-%d}'"
-    ).result()
-
-
-def count_month(client, year, month):
-    start, end = month_bounds(year, month)
-    rows = list(client.query(
-        f"SELECT COUNT(*) AS c FROM `{TABLE_ID}` "
-        f"WHERE transaction_date BETWEEN DATE '{start:%Y-%m-%d}' AND DATE '{end:%Y-%m-%d}'"
-    ).result())
-    return rows[0]["c"] if rows else 0
-
-
-def load_month(client, file_path, year, month):
-    exists = table_exists(client)
-    if exists:
-        delete_month(client, year, month)
-
+def load_to_staging(file_path, args, client):
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.PARQUET,
-        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-        autodetect=True,
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        schema=BQ_SCHEMA,
     )
 
-    with open(file_path, "rb") as f:
-        job = client.load_table_from_file(f, TABLE_ID, job_config=job_config)
+    with open(file_path, "rb") as source_file:
+        job = client.load_table_from_file(source_file, args.staging, job_config=job_config)
+
     job.result()
-
-    if not exists:
-        disable_expiration(client, TABLE_ID)
-
-    print(f"  loaded {job.output_rows} rows -> bulan {year}-{month:02d}")
+    print(f"Data loaded to staging ({args.staging}): {job.output_rows} rows")
 
 
-# ──────────────────────────────────────────────
-#  RUN: satu bulan
-# ──────────────────────────────────────────────
-def run_month(session, client, mapping_df, year, month, keep_parquet=False):
-    month_str = f"{year}-{month:02d}"
-    print(f"\n=== {month_str} ===")
-    t0 = time.time()
+def replace_target(args, client):
+    print(f"Mengganti seluruh data di {args.table}")
+    client.query(f"CREATE OR REPLACE TABLE `{args.table}` AS SELECT * FROM `{args.staging}`").result()
 
-    sales_df = extract_sales_history_month(session, year, month)
-
-    if sales_df.empty:
-        print(f"  {month_str}: tidak ada data")
-        if client and table_exists(client):
-            delete_month(client, year, month)
-        return 0
-
-    result_df = prepare_df(sales_df, mapping_df)
-
-    file_path = f"fact_txn_testing_{month_str}.parquet"
-    write_parquet(result_df, file_path)
-    print(f"  parquet: {file_path} ({len(result_df)} rows, {len(result_df.columns)} cols)")
-
-    if client:
-        load_month(client, file_path, year, month)
-
-    print(f"  {month_str}: selesai {time.time()-t0:.1f}s")
-
-    if client and not keep_parquet:
-        os.remove(file_path)
-
-    return len(result_df)
+    client.query(
+        f"ALTER TABLE `{args.table}` "
+        f"SET OPTIONS (expiration_timestamp = TIMESTAMP '{TABLE_EXPIRATION}')"
+    ).result()
+    print(f"Tabel diganti dan expiration di-set 2099: {args.table}")
 
 
-# ──────────────────────────────────────────────
-#  RUN: rentang bulan (backfill, resume-able)
-# ──────────────────────────────────────────────
-def run_range(session, client, start, end, force=False, map_max_age_days=MAPPING_MAX_AGE_DAYS):
-    print(f"\n=== BACKFILL {start[0]}-{start[1]:02d} .. {end[0]}-{end[1]:02d} ===")
-
-    mapping_df = load_mapping_auto(session, client, from_posting_date=None, max_age_days=map_max_age_days)
-
-    if client is not None and table_exists(client):
-        disable_expiration(client, TABLE_ID)
-
-    today = datetime.now(timezone.utc).replace(tzinfo=None)
-    month_start_today = datetime(today.year, today.month, 1)
-
-    current = datetime(start[0], start[1], 1)
-    last = datetime(end[0], end[1], 1)
-
-    total_rows = 0
-    processed = 0
-    skipped = 0
-    t_start = time.time()
-
-    while current <= last:
-        year, month = current.year, current.month
-        month_start, _ = month_bounds(year, month)
-
-        if month_start > today:
-            break
-
-        if client and not force and month_start < month_start_today:
-            existing = count_month(client, year, month) if table_exists(client) else 0
-            if existing:
-                print(f"\n=== {year}-{month:02d} === skip ({existing} rows sudah ada)")
-                skipped += 1
-                current += relativedelta(months=1)
-                continue
-
-        total_rows += run_month(session, client, mapping_df, year, month)
-        processed += 1
-
-        elapsed = time.time() - t_start
-        done = processed + skipped
-        total_months = ((last.year - start[0]) * 12 + (last.month - start[1])) + 1
-        eta = (elapsed / done) * (total_months - done) if done else 0
-        print(f"  progress: {done}/{total_months} bulan | {total_rows} rows | {elapsed/60:.1f} menit | ETA {eta/60:.1f} menit")
-
-        current += relativedelta(months=1)
-
-    print(f"\nSelesai: {processed} bulan diproses, {skipped} dilewati, {total_rows} rows, {(time.time()-t_start)/60:.1f} menit")
+def cleanup_staging(args, client):
+    try:
+        client.query(f"TRUNCATE TABLE `{args.staging}`").result()
+        print(f"Staging dikosongkan: {args.staging}")
+    except Exception as exc:
+        print(f"Warning: gagal cleanup staging: {exc}")
 
 
-# ──────────────────────────────────────────────
-#  MAIN
-# ──────────────────────────────────────────────
+def main():
+    args = parse_args()
+    if not (MYSQL_USER and MYSQL_PASSWORD and MYSQL_DATABASE):
+        raise SystemExit("Set env MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE")
+    if not args.staging:
+        args.staging = f"{args.table}_staging"
+    start_time = time.time()
+
+    file_path, rows = extract_to_parquet(args)
+
+    if args.no_load:
+        print(f"Selesai tanpa load BQ ({rows} rows) dalam {(time.time()-start_time)/60:.1f} menit")
+        return
+
+    client = bigquery.Client()
+    load_to_staging(file_path, args, client)
+    replace_target(args, client)
+    cleanup_staging(args, client)
+
+    if not args.keep_parquet:
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+
+    print(f"Selesai: {rows} rows dalam {(time.time()-start_time)/60:.1f} menit")
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ETL fact_transaction_testing")
-    parser.add_argument("--build-map", action="store_true",
-                        help="Build mapping sales_order -> posting_date ke BQ (sekali jalan)")
-    parser.add_argument("--month", type=str, help="ETL 1 bulan, format: YYYY-MM (contoh: 2026-09)")
-    parser.add_argument("--range", nargs=2, metavar=("DARI", "SAMPAI"),
-                        help="Backfill rentang bulan, contoh: --range 2022-01 2025-12")
-    parser.add_argument("--year", type=int,
-                        help="Backfill 1 tahun penuh, contoh: --year 2022")
-    parser.add_argument("--all-months", action="store_true",
-                        help=f"Backfill semua bulan dari {START_YEAR} sampai sekarang")
-    parser.add_argument("--force", action="store_true",
-                        help="Timpa bulan yang sudah ada (default: skip saat backfill)")
-    parser.add_argument("--reset", action="store_true",
-                        help="Hapus tabel target dulu (disarankan sekali sebelum backfill)")
-    parser.add_argument("--map-max-age-days", type=int, default=MAPPING_MAX_AGE_DAYS,
-                        help="Umur maksimal cache mapping (hari)")
-    parser.add_argument("--no-load", action="store_true",
-                        help="Hanya buat parquet lokal, tanpa load ke BQ")
-    args = parser.parse_args()
+    main()
 
-    if not any([args.build_map, args.month, args.range, args.year, args.all_months]):
-        print("Gunakan salah satu:")
-        print("  --build-map                  Build mapping ke BQ (sekali jalan)")
-        print("  --month 2026-01              ETL 1 bulan (replace bulan itu)")
-        print("  --year 2022                  Backfill 1 tahun penuh")
-        print("  --range 2022-01 2026-10      Backfill rentang bulan")
-        print("  --all-months                 Backfill semua bulan sampai sekarang")
-        sys.exit(1)
 
-    if sum(bool(x) for x in (args.month, args.range, args.year, args.all_months)) > 1:
-        sys.exit("Pilih salah satu mode: --month, --year, --range, atau --all-months")
 
-    if args.build_map and any([args.month, args.range, args.year, args.all_months]):
-        sys.exit("--build-map tidak bisa digabung dengan mode backfill")
-
-    t_start = time.time()
-
-    if args.build_map:
-        client = bigquery.Client()
-        session = login()
-        build_mapping(session, client)
-    else:
-        session = login()
-        client = None
-        if not args.no_load:
-            try:
-                client = bigquery.Client()
-            except Exception as e:
-                print(f"BQ credentials tidak tersedia: {e}")
-                if not args.month:
-                    sys.exit(1)
-                print("Lanjut tanpa BQ: hasil hanya disimpan ke parquet lokal.")
-
-        if args.reset:
-            if client is None:
-                sys.exit("--reset butuh kredensial BQ")
-            client.delete_table(TABLE_ID, not_found_ok=True)
-            print(f"Tabel dihapus: {TABLE_ID}")
-
-        if args.month:
-            year, month = parse_month(args.month)
-            mapping_df = load_mapping_auto(
-                session, client,
-                from_posting_date=f"{year}-{month:02d}-01",
-                max_age_days=args.map_max_age_days,
-            )
-            if client is not None and table_exists(client):
-                disable_expiration(client, TABLE_ID)
-            run_month(session, client, mapping_df, year, month)
-        else:
-            if args.all_months:
-                start = (START_YEAR, 1)
-                now = datetime.now(timezone.utc)
-                end = (now.year, now.month)
-            elif args.year:
-                start = (args.year, 1)
-                end = (args.year, 12)
-            else:
-                start = parse_month(args.range[0])
-                end = parse_month(args.range[1])
-            if start > end:
-                sys.exit(f"Rentang tidak valid: {start} > {end}")
-            run_range(session, client, start, end, force=args.force, map_max_age_days=args.map_max_age_days)
-
-    print(f"\nSelesai dalam {(time.time() - t_start)/60:.1f} menit")
