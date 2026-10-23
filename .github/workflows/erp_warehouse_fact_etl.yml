@@ -75,7 +75,7 @@ jobs:
 
       - name: Run Fact Transaction ETL
         run: |
-          python etl_fact_transaction_db.py \
+          python etl_fact_transaction_testing.py \
             --start "${{ inputs.start_date }}" \
             --end "${{ inputs.end_date }}" \
             --table "${{ inputs.bq_table }}"
