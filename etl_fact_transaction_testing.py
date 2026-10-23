@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -18,7 +19,8 @@ MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "")
 
 COMPANY = os.getenv("ERP_COMPANY", "SKIN+ DEI")
 SOURCE_TIMEZONE = ZoneInfo("Asia/Jakarta")
-BATCH_SIZE = int(os.getenv("EXTRACT_BATCH_SIZE", "5000"))
+INVOICE_BATCH_SIZE = int(os.getenv("INVOICE_BATCH_SIZE", "1000"))
+LOOKBACK_DAYS = int(os.getenv("PAYMENT_LOOKBACK_DAYS", "30"))
 
 DEFAULT_TABLE_ID = "euromedica-495509.database.fact_transaction_testing"
 TABLE_EXPIRATION = "2099-01-01 00:00:00+00"
@@ -113,262 +115,383 @@ BQ_SCHEMA = [
     bigquery.SchemaField("_extracted_at", "TIMESTAMP"),
 ]
 
-QUERY = """
-WITH so AS (
-  SELECT so.name, so.transaction_date, so.customer, so.customer_name, so.customer_group,
-         so.territory, so.doctor_name, so.order_type, so.selling_price_list,
-         so.client_type, so.company, so.project
-  FROM `tabSales Order` so
-  WHERE so.docstatus = 1 AND so.company = %s
-    AND so.transaction_date >= %s AND so.transaction_date < %s
-),
-soi AS (
-  SELECT soi.name AS so_item, soi.parent AS sales_order, soi.item_code, soi.item_name,
-         soi.item_group, soi.description, soi.qty, soi.uom, soi.net_rate, soi.net_amount,
-         soi.price_list_rate, soi.delivered_qty, soi.billed_amt, soi.treatment_voucher,
-         soi.pricing_rules
-  FROM `tabSales Order Item` soi
-  JOIN so ON so.name = soi.parent
-),
-cust AS (
-  SELECT name, customer_number FROM `tabCustomer`
-  WHERE name IN (SELECT DISTINCT customer FROM so)
-),
-team AS (
-  SELECT parent, sales_person, employee_name FROM (
-    SELECT st.parent, st.sales_person, sp.employee_name,
-           ROW_NUMBER() OVER (PARTITION BY st.parent ORDER BY st.idx) AS rn
-    FROM `tabSales Team` st
-    LEFT JOIN `tabSales Person` sp ON sp.name = st.sales_person
-    WHERE st.parenttype = 'Sales Order'
-      AND st.parent IN (SELECT name FROM so)
-  ) x WHERE rn = 1
-),
-adv AS (
-  SELECT per.reference_name AS sales_order, SUM(per.allocated_amount) AS advance
-  FROM `tabPayment Entry Reference` per
-  JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
-  JOIN so ON so.name = per.reference_name
-  WHERE per.reference_doctype = 'Sales Order'
-    AND pe.mode_of_payment NOT LIKE 'Convert%%'
-  GROUP BY per.reference_name
-),
-si_links AS (
-  SELECT sii.parent AS si, sii.sales_order, sii.so_detail AS so_item, sii.net_amount
-  FROM `tabSales Invoice Item` sii
-  JOIN so ON so.name = sii.sales_order
-  WHERE sii.so_detail IS NOT NULL AND sii.so_detail <> ''
-),
-si_totals AS (
-  SELECT sii.parent AS si, SUM(sii.net_amount) AS si_net
-  FROM `tabSales Invoice Item` sii
-  WHERE sii.parent IN (SELECT DISTINCT si FROM si_links)
-  GROUP BY sii.parent
-),
-si_alloc AS (
-  SELECT per.reference_name AS si, SUM(per.allocated_amount) AS alloc
-  FROM `tabPayment Entry Reference` per
-  JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
-  WHERE per.reference_doctype = 'Sales Invoice'
-    AND per.reference_name IN (SELECT DISTINCT si FROM si_links)
-    AND pe.mode_of_payment NOT LIKE 'Convert%%'
-  GROUP BY per.reference_name
-),
-inv AS (
-  SELECT l.sales_order, l.so_item,
-         SUM(l.net_amount * a.alloc / NULLIF(t.si_net, 0)) AS inv_collected
-  FROM si_links l
-  JOIN si_alloc a ON a.si = l.si
-  JOIN si_totals t ON t.si = l.si
-  GROUP BY l.sales_order, l.so_item
-),
-pd_map AS (
-  SELECT x.sales_order, MIN(x.posting_date) AS posting_date FROM (
-    SELECT sii.sales_order, pe.posting_date
-    FROM `tabPayment Entry Reference` per
-    JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
-    JOIN `tabSales Invoice Item` sii ON sii.parent = per.reference_name
-    JOIN so ON so.name = sii.sales_order
-    WHERE per.reference_doctype = 'Sales Invoice'
-      AND sii.so_detail IS NOT NULL AND sii.so_detail <> ''
-    UNION ALL
-    SELECT per.reference_name AS sales_order, pe.posting_date
-    FROM `tabPayment Entry Reference` per
-    JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
-    JOIN so ON so.name = per.reference_name
-    WHERE per.reference_doctype = 'Sales Order'
-  ) x
-  GROUP BY x.sales_order
-),
-tv_voucher AS (
-  SELECT itv.parent, itv.treatment_voucher, MAX(itv.event_name) AS event_name
-  FROM `tabInvoice Treatment Voucher` itv
-  WHERE itv.parent IN (SELECT name FROM so)
-    AND itv.treatment_voucher IS NOT NULL AND itv.treatment_voucher <> ''
-  GROUP BY itv.parent, itv.treatment_voucher
-),
-tv_item AS (
-  SELECT itv.parent, itv.item_name, MAX(itv.event_name) AS event_name
-  FROM `tabInvoice Treatment Voucher` itv
-  WHERE itv.parent IN (SELECT name FROM so)
-    AND itv.item_name IS NOT NULL AND itv.item_name <> ''
-  GROUP BY itv.parent, itv.item_name
-),
-base AS (
-  SELECT soi.*, so.transaction_date, so.customer, so.customer_name, so.customer_group,
-         so.territory, so.doctor_name, so.order_type, so.selling_price_list,
-         so.client_type, so.company, so.project,
-         COALESCE(inv.inv_collected, 0) AS inv_collected,
-         COALESCE(adv.advance, 0) AS advance
-  FROM soi
-  JOIN so ON so.name = soi.sales_order
-  LEFT JOIN inv ON inv.so_item = soi.so_item
-  LEFT JOIN adv ON adv.sales_order = soi.sales_order
-),
-calc AS (
-  SELECT b.*,
-         GREATEST(b.net_amount - b.inv_collected, 0) AS remaining,
-         SUM(GREATEST(b.net_amount - b.inv_collected, 0))
-           OVER (PARTITION BY b.sales_order) AS total_remaining,
-         SUM(b.net_amount) OVER (PARTITION BY b.sales_order) AS total_net
-  FROM base b
-),
-fin AS (
-  SELECT c.*,
-         c.inv_collected
-         + CASE WHEN c.total_remaining > 0
-                THEN c.advance * c.remaining / c.total_remaining
-                ELSE 0 END
-         + CASE WHEN c.total_remaining < c.advance AND c.total_net > 0
-                THEN (c.advance - c.total_remaining) * c.net_amount / c.total_net
-                ELSE 0 END AS collection
-  FROM calc c
-),
-si_doc AS (
-  SELECT sii.sales_order AS sales_order
-  FROM `tabSales Invoice Item` sii
-  WHERE sii.sales_order IN (SELECT name FROM so)
-  UNION
-  SELECT soi2.parent AS sales_order
-  FROM `tabSales Invoice Item` sii
-  JOIN `tabSales Order Item` soi2 ON soi2.name = sii.so_detail
-  WHERE soi2.parent IN (SELECT name FROM so)
-),
-dn_doc AS (
-  SELECT dni.against_sales_order AS sales_order
-  FROM `tabDelivery Note Item` dni
-  WHERE dni.against_sales_order IN (SELECT name FROM so)
-  UNION
-  SELECT soi3.parent AS sales_order
-  FROM `tabDelivery Note Item` dni
-  JOIN `tabSales Order Item` soi3 ON soi3.name = dni.so_detail
-  WHERE soi3.parent IN (SELECT name FROM so)
-),
-pay_doc AS (
-  SELECT per.reference_name AS sales_order
-  FROM `tabPayment Entry Reference` per
-  JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
-  WHERE per.reference_name IN (SELECT name FROM so)
-  UNION
-  SELECT soi4.parent AS sales_order
-  FROM `tabPayment Entry Reference` per
-  JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
-  JOIN `tabSales Invoice Item` sii ON sii.parent = per.reference_name
-  JOIN `tabSales Order Item` soi4 ON soi4.name = sii.so_detail
-  WHERE soi4.parent IN (SELECT name FROM so)
-),
-item_act AS (
-  SELECT f.sales_order,
-         MAX(CASE WHEN f.delivered_qty > 0 OR f.billed_amt > 0 OR f.collection > 0
-                  THEN 1 ELSE 0 END) AS has_act
-  FROM fin f
-  GROUP BY f.sales_order
-)
-SELECT
-  f.transaction_date,
-  f.sales_order,
-  f.item_code,
-  f.item_name,
-  f.item_group,
-  f.description,
-  f.qty                     AS quantity,
-  f.uom,
-  f.net_rate,
-  f.net_amount,
-  f.customer,
-  f.customer_name,
-  f.customer_group,
-  c.customer_number,
-  f.client_type,
-  t.sales_person            AS sales_consultant,
-  t.employee_name,
-  f.doctor_name,
-  f.selling_price_list      AS price_list,
-  COALESCE(
-    CASE WHEN JSON_VALID(f.pricing_rules)
-         THEN JSON_UNQUOTE(JSON_EXTRACT(f.pricing_rules, '$[0]'))
-         ELSE '' END, '')    AS pricing_rule,
-  f.order_type,
-  f.price_list_rate,
-  f.territory,
-  f.project,
-  f.delivered_qty           AS delivered_quantity,
-  f.billed_amt              AS billed_amount,
-  f.company,
-  0.0                       AS dpp_retail,
-  0.0                       AS ppn_retail,
-  f.collection,
-  f.treatment_voucher,
-  COALESCE(tvv.event_name, tvi.event_name) AS event_name,
-  pdm.posting_date
-FROM fin f
-JOIN item_act ia ON ia.sales_order = f.sales_order
-LEFT JOIN si_doc sd ON sd.sales_order = f.sales_order
-LEFT JOIN dn_doc dd ON dd.sales_order = f.sales_order
-LEFT JOIN pay_doc pdx ON pdx.sales_order = f.sales_order
-LEFT JOIN cust c ON c.name = f.customer
-LEFT JOIN team t ON t.parent = f.sales_order
-LEFT JOIN pd_map pdm ON pdm.sales_order = f.sales_order
-LEFT JOIN tv_voucher tvv
-  ON tvv.parent = f.sales_order AND tvv.treatment_voucher = f.treatment_voucher
-LEFT JOIN tv_item tvi
-  ON tvi.parent = f.sales_order AND tvi.item_name = f.item_code
-WHERE ia.has_act = 1
-   OR f.net_amount = 0
-   OR sd.sales_order IS NOT NULL
-   OR dd.sales_order IS NOT NULL
-   OR pdx.sales_order IS NOT NULL
-"""
+# Default business untuk company. Mengikuti perilaku _apply_default_for_empty_business:
+# business kosong/NULL dianggap business default company.
+DEFAULT_BUSINESS = {
+    "SKIN+ DEI": "SKIN+",
+    "SKIN+ MBS": "SKIN+",
+    "SLIM+": "SLIM+",
+    "European Slimming Centre": "ESC+",
+    "EUROSKINLAB": "ESL",
+    "EUROHAIRLAB": "EHL",
+    "DMI": "DMI",
+}
+
+
+def apply_default_business(company, business):
+    if business is None or str(business).strip() == "":
+        return DEFAULT_BUSINESS.get(company)
+    return business
+
+
+def business_condition(company, business):
+    """Approximation get_business_query_condition: business NULL/'' ikut default company."""
+    if not business:
+        return "", []
+    default = apply_default_business(company, None)
+    if business == default:
+        return " AND (so.business = %s OR so.business IS NULL OR so.business = '')", [business]
+    return " AND so.business = %s", [business]
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="ETL fact_transaction dari MariaDB ERP")
+    parser = argparse.ArgumentParser(description="ETL Item-wise Sales History dari MariaDB")
     parser.add_argument("--start", default=os.getenv("START_DATE", "2022-01-01"),
-                        help="Tanggal awal (YYYY-MM-DD), default 2022-01-01")
+                        help="from_date report (YYYY-MM-DD)")
     parser.add_argument("--end", default=os.getenv("END_DATE"),
-                        help="Tanggal akhir eksklusif (YYYY-MM-DD), default besok (WIB)")
-    parser.add_argument("--table", default=os.getenv("BQ_TABLE", DEFAULT_TABLE_ID),
-                        help="Tabel target BigQuery")
+                        help="to_date report (YYYY-MM-DD), default hari ini WIB")
+    parser.add_argument("--company", default=COMPANY)
+    parser.add_argument("--business", default=os.getenv("BUSINESS"))
+    parser.add_argument("--territory", default=os.getenv("TERRITORY"))
+    parser.add_argument("--item-group", default=os.getenv("ITEM_GROUP"))
+    parser.add_argument("--lookback-days", type=int, default=LOOKBACK_DAYS,
+                        help="Lookback pembayaran sebelum from_date (default 30)")
+    parser.add_argument("--table", default=os.getenv("BQ_TABLE", DEFAULT_TABLE_ID))
     parser.add_argument("--staging", default=os.getenv("BQ_STAGING_TABLE"),
-                        help="Tabel staging BigQuery (default: <table>_staging)")
-    parser.add_argument("--no-load", action="store_true",
-                        help="Hanya ekstrak ke parquet, tanpa load ke BigQuery")
-    parser.add_argument("--keep-parquet", action="store_true",
-                        help="Jangan hapus file parquet setelah load")
+                        help="Tabel staging (default <table>_staging)")
+    parser.add_argument("--no-load", action="store_true")
+    parser.add_argument("--keep-parquet", action="store_true")
+    parser.add_argument("--batch-size", type=int, default=INVOICE_BATCH_SIZE,
+                        help="Jumlah SO per query detail")
     return parser.parse_args()
 
 
-def normalize_batch(df, extracted_at):
+def connect():
+    return pymysql.connect(
+        host=MYSQL_HOST,
+        port=MYSQL_PORT,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database=MYSQL_DATABASE,
+        connect_timeout=15,
+        read_timeout=3600,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.SSDictCursor,
+    )
+
+
+# ──────────────────────────────────────────────
+#  Report logic: payment hash & invoice ids
+# ──────────────────────────────────────────────
+def get_sales_order_payment(cursor, filters):
+    invoice_ids = []
+    invoice_set = set()
+    payment_hash = {}
+
+    from_date = filters["from_date"]
+    to_date = filters["to_date"]
+    lookback_date = from_date - timedelta(days=filters["lookback_days"])
+    company = filters["company"]
+
+    b_cond, b_params = business_condition(company, filters.get("business"))
+
+    common_filters = ""
+    common_params = []
+    if filters.get("territory"):
+        common_filters += " AND so.territory = %s"
+        common_params.append(filters["territory"])
+
+    item_group_filter = ""
+    item_group_params = []
+    if filters.get("item_group"):
+        item_group_filter = (" AND EXISTS (SELECT 1 FROM `tabSales Order Item` soi "
+                             "WHERE soi.parent = so.name AND soi.item_group = %s)")
+        item_group_params.append(filters["item_group"])
+
+    # 1) Payment Entry referenced langsung ke Sales Order
+    q1 = f"""
+        SELECT so.name AS so_name,
+               pe.posting_date AS pe_posting_date,
+               pe.paid_amount AS pe_paid_amount,
+               pe.mode_of_payment AS pe_mode_of_payment,
+               pe.name AS pe_name
+        FROM `tabPayment Entry` pe
+        JOIN `tabPayment Entry Reference` pee ON pee.parent = pe.name
+        JOIN `tabSales Order` so ON so.name = pee.reference_name
+        WHERE so.docstatus = 1
+          AND pe.docstatus = 1
+          AND pe.payment_type = 'Receive'
+          AND pe.posting_date BETWEEN %s AND %s
+          AND pe.company = %s
+          AND so.advance_paid = so.rounded_total
+          {common_filters}
+          {item_group_filter}
+          {b_cond}
+        ORDER BY so.name, pe.posting_date
+    """
+    params = [lookback_date, to_date, company] + common_params + item_group_params + b_params
+    cursor.execute(q1, params)
+    collect_payments(cursor, from_date, to_date, invoice_ids, invoice_set, payment_hash)
+
+    # 2) Payment Entry referenced ke Sales Invoice yang terhubung Sales Order
+    q2 = f"""
+        SELECT so.name AS so_name,
+               pe.posting_date AS pe_posting_date,
+               pe.paid_amount AS pe_paid_amount,
+               pe.mode_of_payment AS pe_mode_of_payment,
+               pe.name AS pe_name
+        FROM `tabPayment Entry` pe
+        JOIN `tabPayment Entry Reference` pee ON pee.parent = pe.name
+        JOIN `tabSales Invoice` si ON si.name = pee.reference_name
+        JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+        JOIN `tabSales Order Item` soi ON soi.name = sii.so_detail
+        JOIN `tabSales Order` so ON so.name = soi.parent
+        WHERE so.docstatus = 1
+          AND si.docstatus = 1
+          AND pe.docstatus = 1
+          AND pe.payment_type = 'Receive'
+          AND pe.posting_date BETWEEN %s AND %s
+          AND pe.company = %s
+          AND so.advance_paid = so.rounded_total
+          AND substring_index(pe.remarks, ' Sales Order ', -1) = so.name
+          {common_filters}
+          {item_group_filter}
+          {b_cond}
+        ORDER BY so.name, pe.posting_date
+    """
+    params = [lookback_date, to_date, company] + common_params + item_group_params + b_params
+    cursor.execute(q2, params)
+    collect_payments(cursor, from_date, to_date, invoice_ids, invoice_set, payment_hash)
+
+    # 3) Sales Order nominal 0
+    q3 = f"""
+        SELECT DISTINCT so.name AS so_name
+        FROM `tabSales Order Item` soi
+        JOIN `tabSales Order` so ON so.name = soi.parent
+        WHERE so.docstatus = 1
+          AND so.transaction_date BETWEEN %s AND %s
+          AND so.company = %s
+          AND so.advance_paid = so.rounded_total
+          AND so.rounded_total = 0
+          {common_filters}
+          {item_group_filter}
+          {b_cond}
+        ORDER BY so.name
+    """
+    params = [from_date, to_date, company] + common_params + item_group_params + b_params
+    cursor.execute(q3, params)
+    for row in cursor:
+        so_name = row["so_name"]
+        if so_name not in invoice_set:
+            invoice_set.add(so_name)
+            invoice_ids.append(so_name)
+
+    return invoice_ids, payment_hash
+
+
+def collect_payments(cursor, from_date, to_date, invoice_ids, invoice_set, payment_hash):
+    for pr in cursor:
+        so_name = pr["so_name"]
+        pe_date = pr["pe_posting_date"]
+
+        if so_name not in invoice_set and from_date <= pe_date <= to_date:
+            invoice_set.add(so_name)
+            invoice_ids.append(so_name)
+
+        h = payment_hash.get(so_name)
+        if h is None:
+            h = {
+                "payment_ids": set(),
+                "convert_payment": 0.0,
+                "advance_paid": 0.0,
+                "used_convert": 0.0,
+                "used_non_convert": 0.0,
+                "posting_dates": [],
+            }
+            payment_hash[so_name] = h
+
+        pe_name = pr["pe_name"]
+        if pe_name not in h["payment_ids"]:
+            h["payment_ids"].add(pe_name)
+            paid = float(pr["pe_paid_amount"] or 0)
+            h["advance_paid"] += paid
+            h["posting_dates"].append(pe_date)
+            if "Convert" in (pr["pe_mode_of_payment"] or ""):
+                h["convert_payment"] += paid
+                h["used_convert"] += paid
+            else:
+                h["used_non_convert"] += paid
+
+
+def get_customer_details(cursor, company):
+    cursor.execute("""
+        SELECT name, customer_name, customer_group, customer_number, business
+        FROM `tabCustomer`
+        WHERE company = %s
+    """, (company,))
+    details = {}
+    for d in cursor:
+        details.setdefault(d["name"], {
+            "customer_name": d["customer_name"],
+            "customer_group": d["customer_group"],
+            "customer_number": d["customer_number"],
+            "business": apply_default_business(company, d["business"]),
+        })
+    return details
+
+
+def get_treatment_vouchers(cursor, invoice_ids, batch_size):
+    vouchers = {}
+    for start in range(0, len(invoice_ids), batch_size):
+        batch = invoice_ids[start:start + batch_size]
+        placeholders = ",".join(["%s"] * len(batch))
+        cursor.execute(f"""
+            SELECT treatment_voucher, event_name, parent
+            FROM `tabInvoice Treatment Voucher`
+            WHERE parent IN ({placeholders})
+        """, batch)
+        for d in cursor:
+            vouchers.setdefault(d["parent"], (d["treatment_voucher"], d["event_name"]))
+    return vouchers
+
+
+def iter_sales_order_details(cursor, invoice_ids, batch_size):
+    for start in range(0, len(invoice_ids), batch_size):
+        batch = invoice_ids[start:start + batch_size]
+        placeholders = ",".join(["%s"] * len(batch))
+        cursor.execute(f"""
+            SELECT
+                so_item.item_code, so_item.item_name, so_item.item_group,
+                so_item.description, so_item.qty, so_item.uom,
+                so_item.net_rate, so_item.net_amount,
+                so.name AS so_name, so.transaction_date, so.customer, so.territory,
+                so.project, so_item.delivered_qty, so_item.billed_amt, so.company,
+                so.order_type, so.client_type, so.selling_price_list, so.business,
+                so.doctor_name, so_item.pricing_rules, so.rounded_total,
+                st.sales_person, e.employee_name, so_item.price_list_rate,
+                i.retail_tax
+            FROM `tabSales Order` so
+            JOIN `tabSales Order Item` so_item ON so.name = so_item.parent
+            LEFT JOIN `tabSales Team` st ON so.name = st.parent
+            LEFT JOIN `tabSales Person` sp ON st.sales_person = sp.name
+            LEFT JOIN `tabEmployee` e ON sp.employee = e.name
+            LEFT JOIN `tabItem` i ON i.name = so_item.item_code
+            WHERE so.nta_to_dei_migration_so_ref IS NULL
+              AND so.name IN ({placeholders})
+            ORDER BY so.name, so_item.net_amount
+        """, batch)
+        for row in cursor:
+            yield row
+
+
+def build_fact_rows(detail_rows, payment_hash, customers, vouchers, filters):
+    item_group_filter = filters.get("item_group")
+
+    for record in detail_rows:
+        if item_group_filter and record["item_group"] != item_group_filter:
+            continue
+
+        so_name = record["so_name"]
+        rounded_total = float(record["rounded_total"] or 0)
+
+        h = payment_hash.get(so_name)
+        completion_payment_status = (
+            rounded_total == 0
+            or (h is not None and h["advance_paid"] == rounded_total)
+        )
+        if not completion_payment_status:
+            continue
+
+        collection = float(record["net_amount"] or 0)
+        if h is not None and h["convert_payment"] != 0:
+            net_amount = float(record["net_amount"] or 0)
+            if h["used_convert"] >= net_amount:
+                collection = 0
+                h["used_convert"] -= net_amount
+            elif h["used_non_convert"] >= net_amount:
+                collection = net_amount
+                h["used_non_convert"] -= net_amount
+            else:
+                collection = h["used_non_convert"]
+
+        record_business = apply_default_business(filters["company"], record["business"])
+        customer_record = customers.get(record["customer"])
+        if customer_record is None:
+            continue
+        if customer_record["business"] != record_business:
+            continue
+
+        pricing_rules = ""
+        if record["pricing_rules"]:
+            try:
+                parsed = json.loads(record["pricing_rules"])
+                pricing_rules = ", ".join(parsed)
+            except Exception:
+                pricing_rules = record["pricing_rules"]
+
+        retail_tax = record.get("retail_tax") or 0
+        net_rate = float(record["net_rate"] or 0)
+        dpp_retail = net_rate * (100 / 111) if retail_tax else 0
+        ppn_retail = dpp_retail * 11 / 100
+
+        invoice_voucher = vouchers.get(so_name)
+
+        posting_dates = h["posting_dates"] if h else []
+        posting_date = min(posting_dates) if posting_dates else None
+
+        yield {
+            "transaction_date": record["transaction_date"],
+            "sales_order": so_name,
+            "item_code": record["item_code"],
+            "item_name": record["item_name"],
+            "item_group": record["item_group"],
+            "description": record["description"],
+            "quantity": record["qty"],
+            "uom": record["uom"],
+            "net_rate": record["net_rate"],
+            "net_amount": record["net_amount"],
+            "customer": record["customer"],
+            "customer_name": customer_record["customer_name"],
+            "customer_group": customer_record["customer_group"],
+            "customer_number": customer_record["customer_number"],
+            "client_type": record["client_type"],
+            "sales_consultant": record["sales_person"],
+            "employee_name": record["employee_name"],
+            "doctor_name": record["doctor_name"],
+            "price_list": record["selling_price_list"],
+            "pricing_rule": pricing_rules,
+            "order_type": record["order_type"],
+            "price_list_rate": record["price_list_rate"],
+            "territory": record["territory"],
+            "project": record["project"],
+            "delivered_quantity": record["delivered_qty"],
+            "billed_amount": record["billed_amt"],
+            "company": record["company"],
+            "dpp_retail": dpp_retail,
+            "ppn_retail": ppn_retail,
+            "collection": collection,
+            "treatment_voucher": invoice_voucher[0] if invoice_voucher else None,
+            "event_name": invoice_voucher[1] if invoice_voucher else None,
+            "posting_date": posting_date,
+        }
+
+
+# ──────────────────────────────────────────────
+#  Parquet / BigQuery
+# ──────────────────────────────────────────────
+def normalize_batch(rows, extracted_at):
+    df = pd.DataFrame(rows)
+
     for column in DATE_COLUMNS:
-        df[column] = pd.to_datetime(df[column], errors="coerce").dt.date
+        if column in df.columns:
+            df[column] = pd.to_datetime(df[column], errors="coerce").dt.date
 
     for column in NUMERIC_COLUMNS:
-        df[column] = pd.to_numeric(df[column], errors="coerce").astype("float64")
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce").astype("float64")
 
     for column in df.columns:
-        if column in DATE_COLUMNS or column in NUMERIC_COLUMNS:
-            continue
-        if column == "_extracted_at":
+        if column in DATE_COLUMNS or column in NUMERIC_COLUMNS or column == "_extracted_at":
             continue
         df[column] = df[column].map(
             lambda value: None if value is None or pd.isna(value) else str(value)
@@ -378,68 +501,64 @@ def normalize_batch(df, extracted_at):
     return df
 
 
-def extract_to_parquet(args):
-    end_date = args.end
-    if not end_date:
-        end_date = (datetime.now(SOURCE_TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    extracted_at = datetime.now(timezone.utc).replace(tzinfo=timezone.utc)
+def extract_to_parquet(args, filters):
+    extracted_at = datetime.now(timezone.utc)
     execution_date = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    file_path = f"fact_transaction_db_{execution_date}.parquet"
+    file_path = f"fact_transaction_report_{execution_date}.parquet"
 
-    connection = pymysql.connect(
-        host=MYSQL_HOST,
-        port=MYSQL_PORT,
-        user=MYSQL_USER,
-        password=MYSQL_PASSWORD,
-        database=MYSQL_DATABASE,
-        connect_timeout=15,
-        read_timeout=3600,
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.SSCursor,
-    )
-
+    connection = connect()
     writer = pq.ParquetWriter(file_path, ARROW_SCHEMA, compression="snappy")
     total_rows = 0
-    batch_count = 0
     total_net = 0.0
-    total_billed = 0.0
     total_collection = 0.0
+    rows_buffer = []
 
     try:
-        print(f"Menarik fact_transaction dari {MYSQL_DATABASE} periode {args.start} s/d {end_date}")
         with connection.cursor() as cursor:
-            cursor.execute(QUERY, (COMPANY, args.start, end_date))
-            column_names = [description[0] for description in cursor.description]
-            print(f"Kolom hasil query: {len(column_names)}")
+            print(f"Report window: {filters['from_date']} s/d {filters['to_date']} "
+                  f"(lookback {filters['lookback_days']} hari, company={filters['company']}, "
+                  f"business={filters.get('business')})")
 
-            while True:
-                rows = cursor.fetchmany(BATCH_SIZE)
-                if not rows:
-                    break
+            invoice_ids, payment_hash = get_sales_order_payment(cursor, filters)
+            print(f"SO fully paid dalam window: {len(invoice_ids)}")
 
-                df = pd.DataFrame(rows, columns=column_names)
-                df = normalize_batch(df, extracted_at)
+            if not invoice_ids:
+                raise ValueError("Tidak ada Sales Order yang memenuhi filter report")
 
-                table = pa.Table.from_pandas(df, schema=ARROW_SCHEMA, preserve_index=False)
-                writer.write_table(table)
+            customers = get_customer_details(cursor, filters["company"])
+            print(f"Customer dimuat: {len(customers)}")
 
-                total_rows += len(df)
-                total_net += float(df["net_amount"].sum())
-                total_billed += float(df["billed_amount"].sum())
-                total_collection += float(df["collection"].sum())
-                batch_count += 1
-                if batch_count % 10 == 0:
+            vouchers = get_treatment_vouchers(cursor, invoice_ids, args.batch_size)
+            print(f"Treatment voucher dimuat: {len(vouchers)}")
+
+            detail_rows = iter_sales_order_details(cursor, invoice_ids, args.batch_size)
+
+            for row in build_fact_rows(detail_rows, payment_hash, customers, vouchers, filters):
+                rows_buffer.append(row)
+                total_net += float(row["net_amount"] or 0)
+                total_collection += float(row["collection"] or 0)
+
+                if len(rows_buffer) >= 10000:
+                    df = normalize_batch(rows_buffer, extracted_at)
+                    writer.write_table(pa.Table.from_pandas(df, schema=ARROW_SCHEMA, preserve_index=False))
+                    total_rows += len(df)
+                    rows_buffer = []
                     print(f"Extracted {total_rows} rows")
+
+            if rows_buffer:
+                df = normalize_batch(rows_buffer, extracted_at)
+                writer.write_table(pa.Table.from_pandas(df, schema=ARROW_SCHEMA, preserve_index=False))
+                total_rows += len(df)
+                print(f"Extracted {total_rows} rows")
     finally:
         connection.close()
         writer.close()
 
     if total_rows == 0:
-        raise ValueError("Tidak ada data fact_transaction pada rentang tanggal tersebut")
+        raise ValueError("Tidak ada data pada window/filter tersebut")
 
     print(f"Parquet saved: {file_path} ({total_rows} rows)")
-    print(f"Summary: net={total_net:,.2f} billed={total_billed:,.2f} collection={total_collection:,.2f}")
+    print(f"Summary: net={total_net:,.2f} collection={total_collection:,.2f}")
     return file_path, total_rows
 
 
@@ -449,10 +568,8 @@ def load_to_staging(file_path, args, client):
         write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
         schema=BQ_SCHEMA,
     )
-
     with open(file_path, "rb") as source_file:
         job = client.load_table_from_file(source_file, args.staging, job_config=job_config)
-
     job.result()
     print(f"Data loaded to staging ({args.staging}): {job.output_rows} rows")
 
@@ -460,7 +577,6 @@ def load_to_staging(file_path, args, client):
 def replace_target(args, client):
     print(f"Mengganti seluruh data di {args.table}")
     client.query(f"CREATE OR REPLACE TABLE `{args.table}` AS SELECT * FROM `{args.staging}`").result()
-
     client.query(
         f"ALTER TABLE `{args.table}` "
         f"SET OPTIONS (expiration_timestamp = TIMESTAMP '{TABLE_EXPIRATION}')"
@@ -482,9 +598,26 @@ def main():
         raise SystemExit("Set env MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE")
     if not args.staging:
         args.staging = f"{args.table}_staging"
-    start_time = time.time()
 
-    file_path, rows = extract_to_parquet(args)
+    start_time = time.time()
+    from_date = datetime.strptime(args.start, "%Y-%m-%d").date()
+    to_date = (datetime.strptime(args.end, "%Y-%m-%d").date()
+               if args.end else datetime.now(SOURCE_TIMEZONE).date())
+
+    if from_date > to_date:
+        raise SystemExit("from_date tidak boleh lebih besar dari to_date")
+
+    filters = {
+        "from_date": from_date,
+        "to_date": to_date,
+        "company": args.company,
+        "business": args.business,
+        "territory": args.territory,
+        "item_group": args.item_group,
+        "lookback_days": args.lookback_days,
+    }
+
+    file_path, rows = extract_to_parquet(args, filters)
 
     if args.no_load:
         print(f"Selesai tanpa load BQ ({rows} rows) dalam {(time.time()-start_time)/60:.1f} menit")
@@ -506,6 +639,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
