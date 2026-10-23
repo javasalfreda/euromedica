@@ -17,12 +17,19 @@ MYSQL_USER = os.getenv("MYSQL_USER", "")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "")
 
-COMPANY = os.getenv("ERP_COMPANY", "SKIN+ DEI")
 SOURCE_TIMEZONE = ZoneInfo("Asia/Jakarta")
 INVOICE_BATCH_SIZE = int(os.getenv("INVOICE_BATCH_SIZE", "1000"))
 LOOKBACK_DAYS = int(os.getenv("PAYMENT_LOOKBACK_DAYS", "30"))
 
-DEFAULT_TABLE_ID = "euromedica-495509.database.fact_transaction_testing"
+DEFAULT_TABLE_ID = "euromedica-495509.database.item_wise_sales"
+DEFAULT_COMPANIES = [
+    "SKIN+ DEI",
+    "European Slimming Centre",
+    "EUROHAIRLAB",
+    "EUROSKINLAB",
+]
+# Business hanya jadi filter di company ini; report mengabaikan business untuk ESC/ESL/EHL.
+BUSINESS_COMPANIES = {"SKIN+ DEI", "SKIN+ MBS", "SLIM+"}
 TABLE_EXPIRATION = "2099-01-01 00:00:00+00"
 
 DATE_COLUMNS = ["transaction_date", "posting_date"]
@@ -150,7 +157,11 @@ def parse_args():
                         help="from_date report (YYYY-MM-DD)")
     parser.add_argument("--end", default=os.getenv("END_DATE"),
                         help="to_date report (YYYY-MM-DD), default hari ini WIB")
-    parser.add_argument("--company", default=COMPANY)
+    parser.add_argument("--company", default=None,
+                        help="Satu company (opsional)")
+    parser.add_argument("--companies", default=os.getenv("ERP_COMPANIES"),
+                        help="Daftar company dipisah koma "
+                             "(default: SKIN+ DEI, European Slimming Centre, EUROHAIRLAB, EUROSKINLAB)")
     parser.add_argument("--business", default=os.getenv("BUSINESS"))
     parser.add_argument("--territory", default=os.getenv("TERRITORY"))
     parser.add_argument("--item-group", default=os.getenv("ITEM_GROUP"))
@@ -164,6 +175,24 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=INVOICE_BATCH_SIZE,
                         help="Jumlah SO per query detail")
     return parser.parse_args()
+
+
+def resolve_companies(args):
+    if args.companies:
+        raw = args.companies.split(",")
+    elif args.company:
+        raw = [args.company]
+    else:
+        raw = list(DEFAULT_COMPANIES)
+
+    companies = []
+    for item in raw:
+        name = item.strip()
+        if name and name not in companies:
+            companies.append(name)
+    if not companies:
+        raise SystemExit("Daftar company kosong")
+    return companies
 
 
 def connect():
@@ -501,10 +530,16 @@ def normalize_batch(rows, extracted_at):
     return df
 
 
-def extract_to_parquet(args, filters):
+def write_buffer(writer, rows_buffer, extracted_at):
+    df = normalize_batch(rows_buffer, extracted_at)
+    writer.write_table(pa.Table.from_pandas(df, schema=ARROW_SCHEMA, preserve_index=False))
+    return len(df)
+
+
+def extract_to_parquet(args, base_filters, companies):
     extracted_at = datetime.now(timezone.utc)
     execution_date = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    file_path = f"fact_transaction_report_{execution_date}.parquet"
+    file_path = f"item_wise_sales_{execution_date}.parquet"
 
     connection = connect()
     writer = pq.ParquetWriter(file_path, ARROW_SCHEMA, compression="snappy")
@@ -515,40 +550,51 @@ def extract_to_parquet(args, filters):
 
     try:
         with connection.cursor() as cursor:
-            print(f"Report window: {filters['from_date']} s/d {filters['to_date']} "
-                  f"(lookback {filters['lookback_days']} hari, company={filters['company']}, "
-                  f"business={filters.get('business')})")
+            print(f"Report window: {base_filters['from_date']} s/d {base_filters['to_date']} "
+                  f"(lookback {base_filters['lookback_days']} hari)")
+            print(f"Companies: {', '.join(companies)}")
 
-            invoice_ids, payment_hash = get_sales_order_payment(cursor, filters)
-            print(f"SO fully paid dalam window: {len(invoice_ids)}")
+            for company in companies:
+                filters = dict(base_filters)
+                filters["company"] = company
+                if company not in BUSINESS_COMPANIES:
+                    filters["business"] = None
 
-            if not invoice_ids:
-                raise ValueError("Tidak ada Sales Order yang memenuhi filter report")
+                print(f"\n=== {company} ===")
+                invoice_ids, payment_hash = get_sales_order_payment(cursor, filters)
+                print(f"SO fully paid dalam window: {len(invoice_ids)}")
 
-            customers = get_customer_details(cursor, filters["company"])
-            print(f"Customer dimuat: {len(customers)}")
+                if not invoice_ids:
+                    print(f"  (tidak ada data untuk {company})")
+                    continue
 
-            vouchers = get_treatment_vouchers(cursor, invoice_ids, args.batch_size)
-            print(f"Treatment voucher dimuat: {len(vouchers)}")
+                customers = get_customer_details(cursor, company)
+                vouchers = get_treatment_vouchers(cursor, invoice_ids, args.batch_size)
+                print(f"Customer: {len(customers)} | Voucher: {len(vouchers)}")
 
-            detail_rows = iter_sales_order_details(cursor, invoice_ids, args.batch_size)
+                company_rows = 0
+                company_net = 0.0
+                company_collection = 0.0
 
-            for row in build_fact_rows(detail_rows, payment_hash, customers, vouchers, filters):
-                rows_buffer.append(row)
-                total_net += float(row["net_amount"] or 0)
-                total_collection += float(row["collection"] or 0)
+                detail_rows = iter_sales_order_details(cursor, invoice_ids, args.batch_size)
+                for row in build_fact_rows(detail_rows, payment_hash, customers, vouchers, filters):
+                    rows_buffer.append(row)
+                    company_rows += 1
+                    company_net += float(row["net_amount"] or 0)
+                    company_collection += float(row["collection"] or 0)
 
-                if len(rows_buffer) >= 10000:
-                    df = normalize_batch(rows_buffer, extracted_at)
-                    writer.write_table(pa.Table.from_pandas(df, schema=ARROW_SCHEMA, preserve_index=False))
-                    total_rows += len(df)
-                    rows_buffer = []
-                    print(f"Extracted {total_rows} rows")
+                    if len(rows_buffer) >= 10000:
+                        total_rows += write_buffer(writer, rows_buffer, extracted_at)
+                        rows_buffer = []
+                        print(f"  Extracted {total_rows} rows")
+
+                total_net += company_net
+                total_collection += company_collection
+                print(f"  {company}: {company_rows} rows | "
+                      f"net={company_net:,.2f} | collection={company_collection:,.2f}")
 
             if rows_buffer:
-                df = normalize_batch(rows_buffer, extracted_at)
-                writer.write_table(pa.Table.from_pandas(df, schema=ARROW_SCHEMA, preserve_index=False))
-                total_rows += len(df)
+                total_rows += write_buffer(writer, rows_buffer, extracted_at)
                 print(f"Extracted {total_rows} rows")
     finally:
         connection.close()
@@ -557,8 +603,8 @@ def extract_to_parquet(args, filters):
     if total_rows == 0:
         raise ValueError("Tidak ada data pada window/filter tersebut")
 
-    print(f"Parquet saved: {file_path} ({total_rows} rows)")
-    print(f"Summary: net={total_net:,.2f} collection={total_collection:,.2f}")
+    print(f"\nParquet saved: {file_path} ({total_rows} rows)")
+    print(f"Total: net={total_net:,.2f} collection={total_collection:,.2f}")
     return file_path, total_rows
 
 
@@ -610,14 +656,14 @@ def main():
     filters = {
         "from_date": from_date,
         "to_date": to_date,
-        "company": args.company,
         "business": args.business,
         "territory": args.territory,
         "item_group": args.item_group,
         "lookback_days": args.lookback_days,
     }
+    companies = resolve_companies(args)
 
-    file_path, rows = extract_to_parquet(args, filters)
+    file_path, rows = extract_to_parquet(args, filters, companies)
 
     if args.no_load:
         print(f"Selesai tanpa load BQ ({rows} rows) dalam {(time.time()-start_time)/60:.1f} menit")
