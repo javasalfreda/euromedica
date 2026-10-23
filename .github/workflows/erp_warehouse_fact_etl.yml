@@ -4,11 +4,27 @@ on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: 'Tanggal awal Sales Order (YYYY-MM-DD)'
+        description: 'from_date report (YYYY-MM-DD)'
         required: true
         default: '2022-01-01'
       end_date:
-        description: 'Tanggal akhir eksklusif (YYYY-MM-DD), kosong = besok WIB'
+        description: 'to_date report (YYYY-MM-DD), kosong = hari ini WIB'
+        required: false
+        default: ''
+      company:
+        description: 'Company'
+        required: true
+        default: 'SKIN+ DEI'
+      business:
+        description: 'Filter business (mis. SKIN+, SLIM+). Kosong = semua'
+        required: false
+        default: ''
+      territory:
+        description: 'Filter territory (opsional)'
+        required: false
+        default: ''
+      item_group:
+        description: 'Filter item group (opsional)'
         required: false
         default: ''
       bq_table:
@@ -78,4 +94,8 @@ jobs:
           python etl_fact_transaction_testing.py \
             --start "${{ inputs.start_date }}" \
             --end "${{ inputs.end_date }}" \
+            --company "${{ inputs.company }}" \
+            --business "${{ inputs.business }}" \
+            --territory "${{ inputs.territory }}" \
+            --item-group "${{ inputs.item_group }}" \
             --table "${{ inputs.bq_table }}"
