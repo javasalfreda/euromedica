@@ -3,6 +3,7 @@ import json
 import os
 import time
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ import pendulum
 import pymysql
 from sqlalchemy import bindparam, create_engine, text
 from google.cloud import bigquery
+from google.api_core.exceptions import NotFound
 
 # --- KONFIGURASI MARIADB ---
 DB_USER = os.getenv("MYSQL_USER", "")
@@ -384,10 +386,22 @@ def execute_extraction(filters, engine):
         return df
 
 
-def extract_sales_df(extract_days=150, start_date=None, end_date=None):
+def default_start_date():
+    """Awal bulan lalu (window 1 bulan, seperti scheduler esc_esl)."""
+    today = pendulum.now(JAKARTA_TZ).date()
+    return today.replace(day=1) - relativedelta(months=1)
+
+
+def extract_sales_df(extract_days=None, start_date=None, end_date=None):
     today = pendulum.now(JAKARTA_TZ).date()
 
-    str_start = start_date or (today - timedelta(days=extract_days)).strftime('%Y-%m-%d')
+    if start_date:
+        str_start = start_date
+    elif extract_days:
+        str_start = (today - timedelta(days=extract_days)).strftime('%Y-%m-%d')
+    else:
+        str_start = default_start_date().strftime('%Y-%m-%d')
+
     str_end = end_date or today.strftime('%Y-%m-%d')
     print(f"Rentang Ekstraksi: {str_start} s/d {str_end}")
 
@@ -479,10 +493,51 @@ def extract_sales_df(extract_days=150, start_date=None, end_date=None):
     return df_transformed
 
 
-def load_to_bigquery(df, table_id, staging_id):
+def table_exists(client, table_id):
+    try:
+        client.get_table(table_id)
+        return True
+    except NotFound:
+        return False
+
+
+def table_schema(client, table_id):
+    table = client.get_table(table_id)
+    return sorted((field.name, field.field_type) for field in table.schema)
+
+
+def build_merge_sql(table_id, staging_id, columns):
+    set_clause = ", ".join(
+        f"T.`{col}` = S.`{col}`" for col in columns if col != "uniid"
+    )
+    insert_cols = ", ".join(f"`{col}`" for col in columns)
+    insert_vals = ", ".join(f"S.`{col}`" for col in columns)
+    return f"""
+        MERGE `{table_id}` T
+        USING `{staging_id}` S
+        ON T.uniid = S.uniid
+           AND IFNULL(T.sales_consultant, '') = IFNULL(S.sales_consultant, '')
+           AND IFNULL(T.employee_name, '') = IFNULL(S.employee_name, '')
+        WHEN MATCHED THEN
+          UPDATE SET {set_clause}
+        WHEN NOT MATCHED THEN
+          INSERT ({insert_cols}) VALUES ({insert_vals})
+    """
+
+
+def load_to_bigquery(df, table_id, staging_id, mode="merge"):
     if df.empty:
         print("DataFrame kosong, tidak load ke BigQuery.")
         return
+
+    if mode == "merge":
+        key = ["uniid", "sales_consultant", "employee_name"]
+        dup_count = int(df.duplicated(subset=key, keep=False).sum())
+        if dup_count:
+            raise RuntimeError(
+                f"Ada {dup_count} baris dengan kunci MERGE duplikat "
+                f"({key}). Jalankan manual dengan mode replace untuk range tersebut."
+            )
 
     temp_parquet = f"item_wise_sales_{datetime.now().strftime('%Y%m%d_%H%M%S')}.parquet"
     df.to_parquet(temp_parquet, index=False)
@@ -498,11 +553,27 @@ def load_to_bigquery(df, table_id, staging_id):
     job.result()
     print(f"Loaded staging {staging_id}: {job.output_rows} rows")
 
-    client.query(f"CREATE OR REPLACE TABLE `{table_id}` AS SELECT * FROM `{staging_id}`").result()
+    target_exists = table_exists(client, table_id)
+
+    if mode == "replace" or not target_exists:
+        client.query(
+            f"CREATE OR REPLACE TABLE `{table_id}` AS SELECT * FROM `{staging_id}`"
+        ).result()
+        print(f"Tabel target diganti penuh (mode={'replace' if mode == 'replace' else 'initial'}): {table_id}")
+    else:
+        if table_schema(client, table_id) != table_schema(client, staging_id):
+            raise RuntimeError(
+                "Schema target berbeda dengan staging. Jalankan manual dengan "
+                "--mode replace dan range backfill (mis. --start 2022-01-01)."
+            )
+
+        merge_sql = build_merge_sql(table_id, staging_id, list(df.columns))
+        client.query(merge_sql).result()
+        print(f"MERGE selesai: {table_id} (update/insert dari {staging_id})")
+
     client.query(
         f"ALTER TABLE `{table_id}` SET OPTIONS (expiration_timestamp = TIMESTAMP '{TABLE_EXPIRATION}')"
     ).result()
-    print(f"Tabel target diganti: {table_id}")
 
     try:
         client.query(f"TRUNCATE TABLE `{staging_id}`").result()
@@ -518,12 +589,15 @@ def load_to_bigquery(df, table_id, staging_id):
 
 def main():
     parser = argparse.ArgumentParser(description="Item-wise Sales ETL (production, MariaDB)")
-    parser.add_argument("--start", default=os.getenv("START_DATE", "2022-01-01"),
-                        help="from_date (YYYY-MM-DD), kosong = extract-days")
+    parser.add_argument("--start", default=os.getenv("START_DATE", ""),
+                        help="from_date (YYYY-MM-DD), kosong = awal bulan lalu (1 bulan)")
     parser.add_argument("--end", default=os.getenv("END_DATE", ""),
                         help="to_date (YYYY-MM-DD), kosong = hari ini WIB")
-    parser.add_argument("--extract-days", type=int, default=150,
-                        help="Dipakai jika --start kosong")
+    parser.add_argument("--extract-days", type=int, default=0,
+                        help="Override: N hari ke belakang jika --start kosong (0 = 1 bulan kalender)")
+    parser.add_argument("--mode", choices=["merge", "replace"],
+                        default=os.getenv("MODE", "merge"),
+                        help="merge = update/insert (scheduler), replace = full replace (backfill)")
     parser.add_argument("--table", default=os.getenv("BQ_TABLE", DEFAULT_TABLE_ID))
     parser.add_argument("--staging", default=os.getenv("BQ_STAGING_TABLE", STAGING_TABLE_ID))
     parser.add_argument("--no-load", action="store_true")
@@ -534,7 +608,7 @@ def main():
 
     t0 = time.time()
     df = extract_sales_df(
-        extract_days=args.extract_days,
+        extract_days=args.extract_days or None,
         start_date=args.start or None,
         end_date=args.end or None,
     )
@@ -546,8 +620,10 @@ def main():
     print(f"Rows: {len(df)} | columns: {len(df.columns)}")
     print(f"Sum rate: {df['rate'].sum():,.2f} | collection: {df['collection'].sum():,.2f} | amount: {df['amount'].sum():,.2f}")
 
+    print(f"Mode: {args.mode}")
+
     if not args.no_load:
-        load_to_bigquery(df, args.table, args.staging)
+        load_to_bigquery(df, args.table, args.staging, mode=args.mode)
 
     print(f"Selesai dalam {(time.time()-t0)/60:.1f} menit")
 
