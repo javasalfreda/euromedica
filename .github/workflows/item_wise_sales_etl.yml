@@ -1,4 +1,4 @@
-name: ERP Item-wise Sales ETL (Production)
+name: ERP Item-wise Sales ETL
 
 on:
   schedule:
