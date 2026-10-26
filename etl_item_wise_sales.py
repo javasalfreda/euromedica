@@ -387,9 +387,8 @@ def execute_extraction(filters, engine):
 
 
 def default_start_date():
-    """Awal bulan lalu (window 1 bulan, seperti scheduler esc_esl)."""
     today = pendulum.now(JAKARTA_TZ).date()
-    return today.replace(day=1) - relativedelta(months=1)
+    return today.replace(day=1) - relativedelta(months=2)
 
 
 def extract_sales_df(extract_days=None, start_date=None, end_date=None):
