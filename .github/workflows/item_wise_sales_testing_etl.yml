@@ -1,0 +1,86 @@
+name: ERP Item-wise Sales Testing ETL
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: 'from_date report (YYYY-MM-DD), kosong = pakai extract_days'
+        required: false
+        default: ''
+      end_date:
+        description: 'to_date report (YYYY-MM-DD), kosong = hari ini WIB'
+        required: false
+        default: ''
+      extract_days:
+        description: 'Jumlah hari ke belakang jika start_date kosong'
+        required: true
+        default: '150'
+      bq_table:
+        description: 'Tabel target BigQuery'
+        required: true
+        default: 'euromedica-495509.database.item_wise_sales_testing'
+
+env:
+  MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
+  MYSQL_PORT: ${{ secrets.MYSQL_PORT }}
+  MYSQL_USER: ${{ secrets.MYSQL_USER }}
+  MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+  MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
+
+jobs:
+  run-item-wise-sales-testing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout Repository Kode
+        uses: actions/checkout@v7
+
+      - name: Validate Tailscale Secret Format
+        env:
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: |
+          if [[ "$TS_OAUTH_SECRET" == *"?"* ]]; then
+            echo "ERROR: TS_OAUTH_SECRET masih mengandung karakter '?'."
+            echo "Simpan hanya bagian tskey-client-... tanpa query string."
+            exit 1
+          fi
+          case "$TS_OAUTH_SECRET" in
+            tskey-client-*) echo "Format TS_OAUTH_SECRET OK" ;;
+            *) echo "ERROR: TS_OAUTH_SECRET harus diawali tskey-client-"; exit 1 ;;
+          esac
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:euromedica-staff
+          ping: 100.87.194.79
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy pyarrow PyMySQL SQLAlchemy pendulum google-cloud-bigquery db-dtypes
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Verify MySQL Connectivity
+        run: |
+          python -c "import os, pymysql; c = pymysql.connect(host=os.environ['MYSQL_HOST'], port=int(os.environ['MYSQL_PORT']), user=os.environ['MYSQL_USER'], password=os.environ['MYSQL_PASSWORD'], database=os.environ['MYSQL_DATABASE'], connect_timeout=15); c.close(); print('MySQL connection OK')"
+
+      - name: Run Item-wise Sales Testing ETL
+        run: |
+          python etl_item_wise_sales_testing.py \
+            --start "${{ inputs.start_date }}" \
+            --end "${{ inputs.end_date }}" \
+            --extract-days "${{ inputs.extract_days }}" \
+            --table "${{ inputs.bq_table }}"
