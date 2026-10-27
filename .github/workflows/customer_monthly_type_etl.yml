@@ -8,13 +8,21 @@ on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: 'from_date status (YYYY-MM-DD), kosong = awal bulan lalu'
+        description: 'from_date status (YYYY-MM-DD), kosong = awal bulan lalu. Refresh 1 bulan penuh: pakai tanggal 1.'
         required: false
         default: ''
       end_date:
-        description: 'to_date status (YYYY-MM-DD), kosong = hari ini WIB'
+        description: 'to_date status (YYYY-MM-DD), kosong = hari ini WIB. Refresh 1 bulan penuh: pakai akhir bulan.'
         required: false
         default: ''
+      mode:
+        description: 'merge = update/insert (default), replace = rebuild/backfill'
+        required: true
+        type: choice
+        default: 'merge'
+        options:
+          - merge
+          - replace
 
 concurrency:
   group: customer-monthly-type-etl
@@ -28,6 +36,7 @@ env:
   MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
   START_DATE: ${{ inputs.start_date }}
   END_DATE: ${{ inputs.end_date }}
+  MODE: ${{ inputs.mode || 'merge' }}
 
 jobs:
   run-customer-monthly-type-etl:
@@ -81,5 +90,5 @@ jobs:
 
       - name: Run Customer Monthly Type ETL
         run: |
-          echo "Window: ${START_DATE:-awal bulan lalu} s/d ${END_DATE:-today WIB} | Mode: merge"
-          python etl_customer_monthly_type.py --start "${START_DATE}" --end "${END_DATE}" --mode merge
+          echo "Window: ${START_DATE:-awal bulan lalu} s/d ${END_DATE:-today WIB} | Mode: ${MODE}"
+          python etl_customer_monthly_type.py --start "${START_DATE}" --end "${END_DATE}" --mode "${MODE}"
