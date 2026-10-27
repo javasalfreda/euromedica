@@ -23,7 +23,7 @@ STAGING_TABLE_ID = "euromedica-495509.database.customer_monthly_type_staging"
 TABLE_EXPIRATION = "2099-01-01 00:00:00+00"
 
 BQ_SCHEMA = [
-    bigquery.SchemaField("period", "STRING"),
+    bigquery.SchemaField("status_date", "DATE"),
     bigquery.SchemaField("customer", "STRING"),
     bigquery.SchemaField("customer_name", "STRING"),
     bigquery.SchemaField("contact_no", "STRING"),
@@ -32,7 +32,6 @@ BQ_SCHEMA = [
 ]
 
 STRING_COLUMNS = [
-    "period",
     "customer",
     "customer_name",
     "contact_no",
@@ -44,7 +43,8 @@ QUERY_TEMPLATE = """
 WITH base AS (
     SELECT
         ccd.customer,
-        DATE_FORMAT(h.status_date, '%Y-%m') AS period,
+        h.status_date,
+        DATE_FORMAT(h.status_date, '%Y-%m') AS month_key,
         CASE
             WHEN LOWER(h.status_territory) LIKE '%sempvrna%' THEN 'Sempvrna'
             WHEN LOWER(h.status_territory) LIKE '%skin+%'   THEN 'SKIN+'
@@ -75,14 +75,15 @@ WITH base AS (
 ranked AS (
     SELECT
         customer,
-        period,
+        month_key,
+        status_date,
         brand,
         status_type,
         customer_name,
         contact_no,
         ROW_NUMBER() OVER (
-            PARTITION BY customer, brand, period
-            ORDER BY priority
+            PARTITION BY customer, brand, month_key
+            ORDER BY priority, status_date DESC
         ) AS rn
     FROM base
     WHERE status_type IS NOT NULL
@@ -90,7 +91,7 @@ ranked AS (
 latest AS (
     SELECT
         customer,
-        period,
+        status_date,
         brand,
         status_type,
         customer_name,
@@ -101,7 +102,7 @@ latest AS (
 detail AS (
     SELECT
         customer,
-        period,
+        status_date,
         brand,
         status_type,
         customer_name,
@@ -109,7 +110,7 @@ detail AS (
     FROM latest
 )
 SELECT
-    period,
+    status_date,
     customer,
     customer_name,
     CASE
@@ -121,7 +122,7 @@ SELECT
     brand,
     status_type AS client_type
 FROM detail
-ORDER BY period, brand, customer_name
+ORDER BY status_date, brand, customer_name
 """
 
 
@@ -177,8 +178,10 @@ def extract_data(start_date, end_date):
     if df.empty:
         return df
 
+    df["status_date"] = pd.to_datetime(df["status_date"]).dt.date
+
     print(f"Rows extracted: {len(df):,}")
-    print(f"Period: {df['period'].min()} s/d {df['period'].max()}")
+    print(f"Status date: {df['status_date'].min()} s/d {df['status_date'].max()}")
     print(df.groupby(["brand", "client_type"]).size().to_string())
 
     return df
@@ -201,17 +204,18 @@ def build_merge_sql(table_id, staging_id):
     return f"""
         MERGE `{table_id}` T
         USING `{staging_id}` S
-        ON T.period = S.period
+        ON DATE_TRUNC(T.status_date, MONTH) = DATE_TRUNC(S.status_date, MONTH)
            AND T.customer = S.customer
            AND IFNULL(T.brand, '') = IFNULL(S.brand, '')
         WHEN MATCHED THEN
           UPDATE SET
+            status_date = S.status_date,
             customer_name = S.customer_name,
             contact_no = S.contact_no,
             client_type = S.client_type
         WHEN NOT MATCHED THEN
-          INSERT (period, customer, customer_name, contact_no, brand, client_type)
-          VALUES (S.period, S.customer, S.customer_name, S.contact_no, S.brand, S.client_type)
+          INSERT (status_date, customer, customer_name, contact_no, brand, client_type)
+          VALUES (S.status_date, S.customer, S.customer_name, S.contact_no, S.brand, S.client_type)
     """
 
 
@@ -220,17 +224,18 @@ def load_to_bigquery(df, table_id, staging_id, mode="merge"):
         print("DataFrame kosong, tidak load ke BigQuery.")
         return
 
-    if df["period"].isna().any() or df["customer"].isna().any():
-        raise RuntimeError("period/customer tidak boleh NULL.")
+    if df["status_date"].isna().any() or df["customer"].isna().any():
+        raise RuntimeError("status_date/customer tidak boleh NULL.")
 
     if mode == "merge":
-        merge_key = df[["period", "brand", "customer"]].copy()
+        merge_key = df[["customer", "brand"]].copy()
         merge_key["brand"] = merge_key["brand"].fillna("")
+        merge_key["month"] = pd.to_datetime(df["status_date"]).dt.strftime("%Y-%m")
         duplicate_count = int(merge_key.duplicated(keep=False).sum())
         if duplicate_count:
             raise RuntimeError(
                 f"Ada {duplicate_count} baris dengan kunci MERGE duplikat "
-                "(period, brand, customer)."
+                "(bulan, brand, customer)."
             )
 
     temp_parquet = (
