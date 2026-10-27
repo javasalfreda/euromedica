@@ -1,4 +1,4 @@
-name: ERP Customer Monthly Type ETL
+name: Customer Monthly Type ETL
 
 on:
   schedule:
