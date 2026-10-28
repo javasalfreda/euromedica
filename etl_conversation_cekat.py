@@ -111,7 +111,10 @@ def extract_and_clean_conversations():
     print("==================================================")
     
     df = pd.DataFrame(all_data)
-    df['created_at_wib'] = pd.to_datetime(df['created_at']).dt.tz_convert('Asia/Jakarta')
+    df['created_at_wib'] = (
+    pd.to_datetime(df['created_at'], format='ISO8601', utc=True)
+      .dt.tz_convert('Asia/Jakarta')
+        )
     df['tanggal_wib'] = df['created_at_wib'].dt.strftime('%Y-%m-%d')
 
     df = df[(df['tanggal_wib'] >= start_date) & (df['tanggal_wib'] <= end_date)]
