@@ -286,11 +286,9 @@ File: [`etl_customer_monthly_type.py`](etl_customer_monthly_type.py)
 - Target: `database.customer_monthly_type`.
 - Mode: `merge` (default) atau `replace`.
 - Status yang dihitung: `new`, `active`, `trial`.
-- `new leaver` dan `trial leaver` tidak dihitung dalam summary bulanan.
 - Prioritas status: `new` > `active` > `trial`.
 - `status_date` disimpan sebagai tanggal lengkap dari status pemenang.
 - Merge key: bulan dari `status_date`, `brand`, `customer`.
-- Expiration tabel target diset 2099.
 
 ### Manual ETL Re-run
 
