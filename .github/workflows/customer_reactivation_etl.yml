@@ -1,4 +1,4 @@
-name: ERP Customer Reactivation ETL
+name: Customer Reactivation ETL
 
 on:
   schedule:
