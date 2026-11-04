@@ -146,6 +146,14 @@ def extract_data():
     return df
 
 
+def normalize_bq_type(field_type):
+    return {
+        "INT64": "INTEGER",
+        "FLOAT64": "FLOAT",
+        "BOOL": "BOOLEAN",
+    }.get(field_type, field_type)
+
+
 def get_target_table(client):
     try:
         table = client.get_table(TABLE_ID)
@@ -155,8 +163,14 @@ def get_target_table(client):
             "Jalankan DDL customer_reactivation terlebih dahulu."
         ) from exc
 
-    actual_schema = [(field.name, field.field_type) for field in table.schema]
-    expected_schema = [(field.name, field.field_type) for field in BQ_SCHEMA]
+    actual_schema = [
+        (field.name, normalize_bq_type(field.field_type))
+        for field in table.schema
+    ]
+    expected_schema = [
+        (field.name, normalize_bq_type(field.field_type))
+        for field in BQ_SCHEMA
+    ]
     if actual_schema != expected_schema:
         raise RuntimeError(
             f"Schema target {TABLE_ID} berbeda. "
