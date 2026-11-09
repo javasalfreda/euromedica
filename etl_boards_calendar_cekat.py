@@ -76,6 +76,47 @@ def extract_and_clean_cekat():
     if "item_id" in df.columns:
         df = df.drop_duplicates(subset=["item_id"])
 
+    def clean_note_value(value):
+        if value is None:
+            return None
+        if isinstance(value, (list, dict)):
+            value = json.dumps(value, ensure_ascii=False)
+        text = str(value).strip()
+        if text == "" or text.lower() in ("nan", "none", "<na>"):
+            return None
+        return text
+
+    def extract_note(row):
+        for key in ("note", "notes", "Note", "Notes"):
+            note = clean_note_value(row.get(key))
+            if note:
+                return note
+
+        additional = row.get("additional_data")
+        if isinstance(additional, str):
+            try:
+                additional = json.loads(additional)
+            except Exception:
+                additional = None
+
+        if isinstance(additional, dict):
+            for key in ("note", "notes", "Note", "Notes"):
+                note = clean_note_value(additional.get(key))
+                if note:
+                    return note
+
+        return None
+
+    def combine_notes(values):
+        notes = sorted({
+            note
+            for note in (clean_note_value(value) for value in values)
+            if note
+        })
+        return " | ".join(notes) if notes else None
+
+    df["note"] = df.apply(extract_note, axis=1)
+
     # Convert dates
     df['created_at'] = pd.to_datetime(df['created_at'], errors='coerce').dt.date
     df['booking_date'] = pd.to_datetime(df['Date'], errors='coerce').dt.date
@@ -135,7 +176,10 @@ def extract_and_clean_cekat():
             'created_at', 'booking_date', 'Phone', 
             'board_name', 'visit', 'conv_status', 'kode_qris', 'agent'
         ], dropna=False)
-        .agg({'collection': 'sum'})
+        .agg({
+            'collection': 'sum',
+            'note': combine_notes,
+        })
         .reset_index()
     )
 
@@ -154,6 +198,7 @@ def load_to_bq(file_path, client):
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.PARQUET,
         write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        autodetect=True,
     )
 
     with open(file_path, "rb") as source_file:
