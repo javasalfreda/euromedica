@@ -13,6 +13,7 @@ REPORT_URL = f"{BASE_URL}/api/method/frappe.desk.query_report.run"
 USERNAME = "denny.asarias.dei@skinplusclinic.com"
 PASSWORD = "260628"
 REPORT_NAME = "Item-wise Sales History"
+TABLE_EXPIRATION = "2099-01-01 00:00:00+00"
 
 def etl_erp_to_parquet():
     # Menggunakan datetime hari ini (karena dijalankan harian oleh cron)
@@ -76,8 +77,11 @@ def load_parquet_to_bq(file_path, client):
     print(f"🚀 Berhasil memuat {job.output_rows} baris ke BigQuery.")
 
 def transform_bq(client):
-    query = """
-        CREATE OR REPLACE TABLE `euromedica-495509.database.fact_transaction` AS
+    query = f"""
+        CREATE OR REPLACE TABLE `euromedica-495509.database.fact_transaction`
+        OPTIONS (
+            expiration_timestamp = TIMESTAMP '{TABLE_EXPIRATION}'
+        ) AS
         SELECT *
         FROM `euromedica-495509.database.fact_transaction`
         WHERE DATE(transaction_date) <= LAST_DAY(DATE_SUB(CURRENT_DATE(), INTERVAL 2 MONTH))
