@@ -35,7 +35,8 @@ def extract_and_clean_conversations():
     
     today_dt = datetime.now(timezone.utc)
     end_date = today_dt.strftime('%Y-%m-%d')                             
-    start_date = (today_dt - timedelta(days=3)).strftime('%Y-%m-%d')  
+    #start_date = (today_dt - timedelta(days=3)).strftime('%Y-%m-%d')  
+    start_date = (today_dt - timedelta(days=180)).strftime('%Y-%m-%d')
     
     params = {
         "limit": LIMIT,
