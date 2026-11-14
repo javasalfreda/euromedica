@@ -34,10 +34,10 @@ def extract_and_clean_conversations():
     request_count = 1  
     
     today_dt = datetime.now(timezone.utc)
-    #end_date = today_dt.strftime('%Y-%m-%d')                             
-    #start_date = (today_dt - timedelta(days=7)).strftime('%Y-%m-%d')  
-    start_date = (today_dt - timedelta(days=180)).strftime('%Y-%m-%d')
-    end_date = (today_dt - timedelta(days=91)).strftime('%Y-%m-%d')
+    end_date = today_dt.strftime('%Y-%m-%d')                             
+    start_date = (today_dt - timedelta(days=7)).strftime('%Y-%m-%d')  
+    #start_date = (today_dt - timedelta(days=180)).strftime('%Y-%m-%d')
+    #end_date = (today_dt - timedelta(days=91)).strftime('%Y-%m-%d')
     
     params = {
         "limit": LIMIT,
